@@ -1,0 +1,17 @@
+<launch>
+  <!-- 固定使用仿真时钟 -->
+  <param name="/use_sim_time" value="false" />
+
+  <!-- 启动 Livox merge -->
+  <include file="$(find livox_merge)/launch/livox_merge.launch" />
+
+  <!-- 启动 LIO-SAM (6-axis) -->
+  <include file="$(find lio_sam)/launch/run6axis.launch" />
+
+  <!-- 固定 rosbag 播放（延时3秒，确保订阅者就绪） -->
+  <node pkg="rosbag" type="play" name="rosbag_play"
+        args="/home/nvidia/ws_livox/src/livox_ros_driver2/data/zhangjiang20251205.bag"
+        launch-prefix="bash -c 'sleep 3; exec $0 $@'"
+        output="screen" />
+
+</launch>

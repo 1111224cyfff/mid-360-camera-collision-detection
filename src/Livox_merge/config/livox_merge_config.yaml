@@ -1,0 +1,80 @@
+# Livox Multi-LiDAR and IMU Fusion Configuration
+
+# System Parameters
+sync_frequency: 20.0    # Synchronization frequency in Hz
+max_threads: -1         # Maximum threads (-1 for auto-detection)
+
+# LiDAR Configuration
+lidars:
+  count: 2
+  topics:
+    - "/livox/lidar_192_168_2_125"
+    - "/livox/lidar_192_168_2_148"
+  
+  # Extrinsics: 4x4 transformation matrices (row-major order)
+  # Each matrix transforms from LiDAR frame to body frame
+  extrinsics:
+    lidar_0:  # Identity transformation
+      - [1.0, 0.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0, 0.0]
+      - [0.0, 0.0, 1.0, 0.0]
+      - [0.0, 0.0, 0.0, 1.0]
+    
+    lidar_1:  # 90-degree rotation around Y-axis
+      - [-0.63826, -0.0223947,   0.769495,    0.18648]
+      - [0.0165354,  -0.999745, -0.0153804, -0.0027491]
+      - [0.769643, 0.00290722,   0.638467, -0.0895987]
+      - [0.0, 0.0, 0.0, 1.0]
+  
+# IMU Configuration
+imus:
+  count: 2
+  topics:
+    - "/livox/imu_192_168_2_125"
+    - "/livox/imu_192_168_2_148"
+  
+  # Extrinsics: 4x4 transformation matrices (row-major order)
+  # Each matrix transforms from IMU frame to body frame
+  extrinsics:
+    imu_0:  # Identity transformation (same as LiDAR 0)
+      - [1.0, 0.0, 0.0, 0.0]
+      - [0.0, 1.0, 0.0, 0.0]
+      - [0.0, 0.0, 1.0, 0.0]
+      - [0.0, 0.0, 0.0, 1.0]
+    
+    imu_1:  # Same rotation as LiDAR 1
+      - [-0.63826, -0.0223947,   0.769495,    0.18648]
+      - [0.0165354,  -0.999745, -0.0153804, -0.0027491]
+      - [0.769643, 0.00290722,   0.638467, -0.0895987]
+      - [0.0, 0.0, 0.0, 1.0]
+
+# Output Topics
+output:
+  pointcloud2: "/livox_merge/merged_pointcloud"
+  livox_custom: "/livox_merge/merged_livox"
+  imu: "/livox_merge/merged_imu"
+  frame_id: "body"
+
+# Buffer Management
+buffers:
+  max_lidar_buffer_size: 50
+  max_imu_buffer_size: 200
+  history_retention_time: 0.1  # seconds
+
+# Performance Monitoring
+monitoring:
+  enable_performance_stats: true
+  stats_output_interval: 100  # frames
+  enable_debug_output: false
+
+# IMU merge/publish settings (optional)
+# mode 可选: time_sorted | select | fused
+# - time_sorted: 维持当前行为，将各路IMU按时间窗口收集并排序逐条发布
+# - select: 仅发布指定一路IMU（通过下方 index 或 topic 关键字选择）
+# - fused: 在每个激光同步窗口内对所有IMU做简单平均融合，发布一条融合IMU
+imu_publish_mode: time_sorted
+
+# 当 mode=select 时可用：优先使用 index（0/1/... 对应 imus.topics 列表顺序），
+# 若 index<0 且提供 topic 关键字，则按关键字匹配话题确定索引
+imu_select_index: 0
+imu_select_topic_contains: ""

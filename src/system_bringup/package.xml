@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>system_bringup</name>
+  <version>0.1.0</version>
+  <description>Unified launch to bring up Livox merge, LIO-SAM, and rosbag playback.</description>
+
+  <maintainer email="maintainer@example.com">Maintainer</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <exec_depend>roslaunch</exec_depend>
+  <exec_depend>rosbag</exec_depend>
+
+  <export>
+  </export>
+</package>
+ 

@@ -1,0 +1,68 @@
+<launch>
+    <!-- Multi-LiDAR and IMU Fusion Node for Livox Sensors -->
+    <node pkg="livox_merge" type="merge_lidar_node" name="livox_merge_node" output="screen">
+        
+        <!-- LiDAR Topics -->
+        <rosparam param="lidar_topic">[
+            "/livox/lidar_192_168_10_110",
+            "/livox/lidar_192_168_11_125"
+        ]</rosparam>
+        
+        <!-- IMU Topics (corresponding to each LiDAR) -->
+        <rosparam param="imu_topic">[
+            "/livox/imu_192_168_10_110",
+            "/livox/imu_192_168_11_125"
+        ]</rosparam>
+        
+        <!-- LiDAR Extrinsics (Euler angles in degrees and translation in meters) -->
+        <rosparam param="lidar_extrinsics">
+            - roll: 0.0
+              pitch: 0.0
+              yaw: 0.0
+              x: 0.0
+              y: 0.0
+              z: 0.0
+            - roll: 0.0
+              pitch: 0.0
+              yaw: 90.0
+              x: 0.0
+              y: 0.0
+              z: 0.0
+        </rosparam>
+        
+        <!-- IMU Extrinsics (Euler angles in degrees and translation in meters) -->
+        <!-- IMU通常与对应的LiDAR有相同或轻微的偏移 -->
+        <rosparam param="imu_extrinsics">
+            - roll: 0.0
+              pitch: 0.0
+              yaw: 0.0
+              x: 0.0
+              y: 0.0
+              z: 0.0
+            - roll: 0.0
+              pitch: 0.0
+              yaw: 90.0
+              x: 0.0
+              y: 0.0
+              z: 0.0
+        </rosparam>
+        
+        <!-- Height slicing parameters -->
+        <param name="slice_z_min" value="-1.5"/>
+        <param name="slice_z_max" value="2.5"/>
+        
+        <!-- Topic Remapping -->
+        <remap from="/merged_pointcloud" to="/merged_pointcloud"/>
+        <remap from="/merged_pointcloud_sliced" to="/merged_pointcloud_sliced"/>
+        <remap from="/merged_livox" to="/merged_livox"/>
+        <remap from="/merged_imu" to="/merged_imu"/>
+    </node>
+
+    <!-- RViz Visualization -->
+    <node name="rviz" pkg="rviz" type="rviz" output="screen" 
+          args="-d $(find livox_merge)/rviz/livox_merge.rviz"/>
+
+    <!-- System Monitoring -->
+    <!-- <node name="fusion_monitor" pkg="livox_merge" type="test_fusion_system.py" output="screen"/> -->
+    
+</launch>

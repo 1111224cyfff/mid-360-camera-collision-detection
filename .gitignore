@@ -1,0 +1,32 @@
+# ROS/catkin build artifacts
+build/
+devel/
+build_isolated/
+devel_isolated/
+install/
+
+# Catkin tools / ROS
+.catkin_tools/
+.catkin_workspace
+
+# Bags / datasets
+*.bag
+*.bag.active
+*.bag.orig
+
+# Compiled artifacts
+*.o
+*.so
+*.a
+*.out
+
+# Python
+__pycache__/
+*.pyc
+
+# Editors
+.vscode/
+.idea/
+
+# OS
+.DS_Store

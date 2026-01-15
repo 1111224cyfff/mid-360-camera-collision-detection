@@ -2,8 +2,8 @@
 lio_sam:
 
   # Topics
-  pointCloudTopic: "livox/lidar"               # Point cloud data
-  imuTopic: "livox/imu"                         # IMU data
+  pointCloudTopic: "/mid360/livox/lidar"               # Point cloud data
+  imuTopic: "/mid360/livox/imu"                         # IMU data
   odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
   gpsTopic: "odometry/gpsz"                   # GPS odometry topic from navsat, see module_navsat.launch file
 
@@ -86,6 +86,30 @@ lio_sam:
   globalMapVisualizationSearchRadius: 1000.0    # meters, global map visualization radius
   globalMapVisualizationPoseDensity: 1       # meters, global map visualization keyframe density
   globalMapVisualizationLeafSize: 0.3           # meters, global map visualization cloud density
+
+  # Dynamic point identification + clustering (for obstacle candidates)
+  # Topics:
+  #   - /lio_sam/mapping/cloud_dynamic
+  #   - /lio_sam/mapping/cloud_dynamic_clustered
+  #   - /lio_sam/mapping/dynamic_clusters
+  #   - /lio_sam/mapping/dynamic_cluster_centers
+  dynamic_point_detection:
+    enabled: true
+    knn_k: 5
+    knn_max_dist_base: 0.45
+    knn_max_dist_scale: 0.0
+    neighbor_radius: 0.6
+    min_neighbors: 3
+    downsample_leaf_size: 0.25
+    max_range: -1.0
+    publish_static: false
+
+    clustering_enabled: true
+    cluster_tolerance: 0.6
+    cluster_min_size: 20
+    cluster_max_size: 50000
+    publish_markers: true
+    publish_centers: true
 
 
 

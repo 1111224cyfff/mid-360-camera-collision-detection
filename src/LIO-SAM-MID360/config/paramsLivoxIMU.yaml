@@ -87,6 +87,32 @@ lio_sam:
   globalMapVisualizationPoseDensity: 1       # meters, global map visualization keyframe density
   globalMapVisualizationLeafSize: 0.3           # meters, global map visualization cloud density
 
+  # Dynamic point identification + clustering (for obstacle candidates)
+  # Topics:
+  #   - /lio_sam/mapping/cloud_dynamic
+  #   - /lio_sam/mapping/cloud_dynamic_clustered
+  #   - /lio_sam/mapping/dynamic_clusters
+  #   - /lio_sam/mapping/dynamic_cluster_centers
+  dynamic_point_detection:
+    enabled: true
+    knn_k: 5
+    knn_max_dist_base: 0.20
+    knn_max_dist_scale: 0.0
+    neighbor_radius: 0.60
+    min_neighbors: 0
+    downsample_leaf_size: 0.05
+    max_range: 6.0
+    publish_static: false
+    exclude_from_map: true
+
+    clustering_enabled: true
+    filter_by_cluster: true
+    cluster_tolerance: 0.22
+    cluster_min_size: 60
+    cluster_max_size: 20000
+    publish_markers: true
+    publish_centers: true
+
 
 
 

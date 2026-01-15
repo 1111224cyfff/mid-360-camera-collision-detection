@@ -1,0 +1,25 @@
+dynamic_tracker:
+  input_topic: /lio_sam/mapping/dynamic_cluster_centers
+  output_frame: ""   # empty = use incoming PoseArray frame_id
+
+  # Preference=2 (avoid misses): permissive defaults
+  gate_distance_base: 1.5              # [m]
+  gate_distance_per_second: 3.0        # [m/s] additional gate = base + per_second * dt
+
+  confirm_hits: 2                      # require 2 consecutive associations to confirm (fewer spurious IDs)
+  confirm_window: 3
+
+  max_missed_frames: 20
+  max_missed_time: 2.0                 # [s]
+
+  # Simple 2D constant-velocity Kalman filter tuning
+  process_noise_acc: 3.0               # [m/s^2]
+  meas_noise_pos: 0.12                 # [m]
+
+  z_lowpass_alpha: 0.8
+
+  prediction_horizon: 2.0              # [s]
+  prediction_dt: 0.2                   # [s]
+
+  publish_markers: true
+  publish_tracked_centers: true

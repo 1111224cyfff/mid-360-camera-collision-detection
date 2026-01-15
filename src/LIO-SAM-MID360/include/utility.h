@@ -153,6 +153,25 @@ public:
     float globalMapVisualizationPoseDensity;
     float globalMapVisualizationLeafSize;
 
+    // Dynamic point detection + clustering (for obstacle extraction)
+    bool  dynamicPointEnable;
+    bool  dynamicPublishStatic;
+    bool  dynamicExcludeFromMap;
+    bool  dynamicClusteringEnable;
+    bool  dynamicPublishMarkers;
+    bool  dynamicPublishCenters;
+    bool  dynamicFilterByCluster;
+    int   dynamicKnnK;
+    float dynamicKnnMaxDistBase;
+    float dynamicKnnMaxDistScale;
+    float dynamicNeighborRadius;
+    int   dynamicMinNeighbors;
+    float dynamicDownsampleLeafSize;
+    float dynamicMaxRange;
+    float dynamicClusterTolerance;
+    int   dynamicClusterMinSize;
+    int   dynamicClusterMaxSize;
+
     ParamServer()
     {
         nh.param<std::string>("/robot_id", robot_id, "roboat");
@@ -249,6 +268,29 @@ public:
         nh.param<float>("lio_sam/globalMapVisualizationSearchRadius", globalMapVisualizationSearchRadius, 1e3);
         nh.param<float>("lio_sam/globalMapVisualizationPoseDensity", globalMapVisualizationPoseDensity, 10.0);
         nh.param<float>("lio_sam/globalMapVisualizationLeafSize", globalMapVisualizationLeafSize, 1.0);
+
+        // Dynamic point detection (scan-to-map residual based)
+        nh.param<bool>("lio_sam/dynamic_point_detection/enabled", dynamicPointEnable, false);
+        nh.param<int>("lio_sam/dynamic_point_detection/knn_k", dynamicKnnK, 5);
+        // Backward compatible: if only knn_max_dist is provided, use it as base.
+        nh.param<float>("lio_sam/dynamic_point_detection/knn_max_dist", dynamicKnnMaxDistBase, 0.5f);
+        nh.param<float>("lio_sam/dynamic_point_detection/knn_max_dist_base", dynamicKnnMaxDistBase, dynamicKnnMaxDistBase);
+        nh.param<float>("lio_sam/dynamic_point_detection/knn_max_dist_scale", dynamicKnnMaxDistScale, 0.0f);
+        nh.param<float>("lio_sam/dynamic_point_detection/neighbor_radius", dynamicNeighborRadius, 0.5f);
+        nh.param<int>("lio_sam/dynamic_point_detection/min_neighbors", dynamicMinNeighbors, 3);
+        nh.param<float>("lio_sam/dynamic_point_detection/downsample_leaf_size", dynamicDownsampleLeafSize, 0.25f);
+        nh.param<float>("lio_sam/dynamic_point_detection/max_range", dynamicMaxRange, -1.0f);
+        nh.param<bool>("lio_sam/dynamic_point_detection/publish_static", dynamicPublishStatic, false);
+        nh.param<bool>("lio_sam/dynamic_point_detection/exclude_from_map", dynamicExcludeFromMap, false);
+
+        // Euclidean clustering on dynamic points
+        nh.param<bool>("lio_sam/dynamic_point_detection/clustering_enabled", dynamicClusteringEnable, true);
+        nh.param<bool>("lio_sam/dynamic_point_detection/filter_by_cluster", dynamicFilterByCluster, false);
+        nh.param<float>("lio_sam/dynamic_point_detection/cluster_tolerance", dynamicClusterTolerance, 0.6f);
+        nh.param<int>("lio_sam/dynamic_point_detection/cluster_min_size", dynamicClusterMinSize, 20);
+        nh.param<int>("lio_sam/dynamic_point_detection/cluster_max_size", dynamicClusterMaxSize, 50000);
+        nh.param<bool>("lio_sam/dynamic_point_detection/publish_markers", dynamicPublishMarkers, true);
+        nh.param<bool>("lio_sam/dynamic_point_detection/publish_centers", dynamicPublishCenters, true);
 
         usleep(100);
     }

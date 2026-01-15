@@ -101,15 +101,35 @@ lio_sam:
 
   # Dynamic point identification (scan-to-map residual based)
   # Outputs:
-  #   - /lio_sam/dynamic_points
-  #   - /lio_sam/static_points
+  #   - /lio_sam/mapping/cloud_dynamic
+  #   - /lio_sam/mapping/cloud_dynamic_clustered
+  #   - /lio_sam/mapping/dynamic_clusters (MarkerArray)
+  #   - /lio_sam/mapping/dynamic_cluster_centers (PoseArray)
   dynamic_point_detection:
     enabled: true
     knn_k: 5
-    knn_max_dist: 0.5                 # [m] nearest-neighbor gating to local map
-    plane_max_dist: 0.25              # [m] point-to-plane distance threshold
-    plane_neighbor_max_dist: 0.2      # [m] validate local plane using neighbors
-    downsample_leaf_size: 0.0         # [m] 0 disables downsampling of input cloud
+    # Dynamic decision (in odom frame, after scan-to-map):
+    #   dynamic if nn_dist > knn_max_dist_base + knn_max_dist_scale * range
+    knn_max_dist_base: 0.45           # [m] base nearest-neighbor distance threshold
+    knn_max_dist_scale: 0.0           # [m/m] range-dependent relaxation (e.g. 0.01)
+    neighbor_radius: 0.6              # [m] neighborhood radius in local map
+    min_neighbors: 3                  # [-] require at least N neighbors in local map
+      downsample_leaf_size: 0.25        # [m] downsample registered cloud before testing
+      exclude_from_map: false
+    max_range: -1.0                   # [m] <=0 disables (useful to focus near-field)
+    publish_static: false
+
+      # If true, publish /cloud_dynamic with only points that belong to valid clusters.
+      # This is useful to suppress isolated false positives.
+      filter_by_cluster: false
+
+    # Clustering (for obstacle candidates)
+    clustering_enabled: true
+    cluster_tolerance: 0.22           # [m]
+    cluster_min_size: 60
+    cluster_max_size: 50000
+    publish_markers: true
+    publish_centers: true
 
 
 

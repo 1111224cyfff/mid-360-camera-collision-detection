@@ -22,7 +22,7 @@ find_package(catkin REQUIRED COMPONENTS
 )
 
 find_package(OpenMP REQUIRED)
-find_package(PCL REQUIRED COMPONENTS common io filters kdtree search registration features)
+find_package(PCL REQUIRED COMPONENTS common io filters kdtree search registration features segmentation)
 find_package(OpenCV REQUIRED QUIET)
 find_package(GTSAM REQUIRED QUIET)
 find_package(Boost REQUIRED COMPONENTS timer)
@@ -101,3 +101,7 @@ target_link_libraries(${PROJECT_NAME}_mapOptmization Boost::timer ${catkin_LIBRA
 # IMU Preintegration
 add_executable(${PROJECT_NAME}_imuPreintegration src/imuPreintegration.cpp)
 target_link_libraries(${PROJECT_NAME}_imuPreintegration Boost::timer ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${OpenCV_LIBS} gtsam)
+
+# Dynamic cluster tracker (ID + velocity + prediction markers)
+add_executable(${PROJECT_NAME}_dynamicTracker src/dynamicTracker.cpp)
+target_link_libraries(${PROJECT_NAME}_dynamicTracker ${catkin_LIBRARIES})

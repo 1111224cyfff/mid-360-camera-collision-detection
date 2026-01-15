@@ -2,6 +2,11 @@
 #include "lio_sam/cloud_info.h"
 #include "lio_sam/save_map.h"
 
+#include <geometry_msgs/PoseArray.h>
+
+#include <pcl/segmentation/extract_clusters.h>
+#include <pcl/search/kdtree.h>
+
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/slam/PriorFactor.h>
@@ -72,6 +77,11 @@ public:
     ros::Publisher pubRecentKeyFrame;
     ros::Publisher pubCloudRegisteredRaw;
     ros::Publisher pubLoopConstraintEdge;
+
+    ros::Publisher pubDynamicCloud;
+    ros::Publisher pubDynamicCloudClustered;
+    ros::Publisher pubDynamicClusters;
+    ros::Publisher pubDynamicClusterCenters;
 
     ros::Publisher pubSLAMInfo;
 
@@ -183,6 +193,11 @@ public:
         pubRecentKeyFrame     = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_registered", 1);
         pubCloudRegisteredRaw = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_registered_raw", 1);
 
+        pubDynamicCloud           = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_dynamic", 1);
+        pubDynamicCloudClustered  = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_dynamic_clustered", 1);
+        pubDynamicClusters        = nh.advertise<visualization_msgs::MarkerArray>("lio_sam/mapping/dynamic_clusters", 1);
+        pubDynamicClusterCenters  = nh.advertise<geometry_msgs::PoseArray>("lio_sam/mapping/dynamic_cluster_centers", 1);
+
         pubSLAMInfo           = nh.advertise<lio_sam::cloud_info>("lio_sam/mapping/slam_info", 1);
 
         downSizeFilterCorner.setLeafSize(mappingCornerLeafSize, mappingCornerLeafSize, mappingCornerLeafSize);
@@ -191,6 +206,202 @@ public:
         downSizeFilterSurroundingKeyPoses.setLeafSize(surroundingKeyframeDensity, surroundingKeyframeDensity, surroundingKeyframeDensity); // for surrounding key poses of scan-to-map optimization
 
         allocateMemory();
+    }
+
+    pcl::PointCloud<PointType>::Ptr buildLocalMapCloud() const
+    {
+        pcl::PointCloud<PointType>::Ptr mapLocal(new pcl::PointCloud<PointType>());
+        mapLocal->reserve(laserCloudCornerFromMapDS->size() + laserCloudSurfFromMapDS->size());
+        *mapLocal += *laserCloudCornerFromMapDS;
+        *mapLocal += *laserCloudSurfFromMapDS;
+        return mapLocal;
+    }
+
+    void extractDynamicAndClusters(
+        const pcl::PointCloud<PointType>::Ptr& registeredCloud,
+        pcl::PointCloud<PointType>::Ptr& dynamicCloudOut,
+        pcl::PointCloud<PointType>::Ptr& dynamicClusteredOut,
+        visualization_msgs::MarkerArray& clustersMarkersOut,
+        geometry_msgs::PoseArray& centersOut)
+    {
+        dynamicCloudOut.reset(new pcl::PointCloud<PointType>());
+        dynamicClusteredOut.reset(new pcl::PointCloud<PointType>());
+        clustersMarkersOut.markers.clear();
+        centersOut.poses.clear();
+
+        if (!dynamicPointEnable)
+            return;
+
+        auto mapLocal = buildLocalMapCloud();
+        if (!mapLocal || mapLocal->empty())
+            return;
+
+        // Downsample registered cloud before testing (performance)
+        pcl::PointCloud<PointType>::Ptr testCloud = registeredCloud;
+        pcl::PointCloud<PointType>::Ptr testCloudDS(new pcl::PointCloud<PointType>());
+        if (dynamicDownsampleLeafSize > 1e-6f)
+        {
+            pcl::VoxelGrid<PointType> vg;
+            vg.setLeafSize(dynamicDownsampleLeafSize, dynamicDownsampleLeafSize, dynamicDownsampleLeafSize);
+            vg.setInputCloud(registeredCloud);
+            vg.filter(*testCloudDS);
+            testCloud = testCloudDS;
+        }
+
+        pcl::KdTreeFLANN<PointType> kdtreeMap;
+        kdtreeMap.setInputCloud(mapLocal);
+
+        const int k = std::max(1, dynamicKnnK);
+        std::vector<int> nnIdx(k);
+        std::vector<float> nnSqDist(k);
+
+        std::vector<int> radiusIdx;
+        std::vector<float> radiusSqDist;
+
+        dynamicCloudOut->reserve(testCloud->size());
+
+        for (const auto& pt : testCloud->points)
+        {
+            const float r = pointDistance(pt);
+            if (dynamicMaxRange > 0.0f && r > dynamicMaxRange)
+                continue;
+
+            int found = kdtreeMap.nearestKSearch(pt, k, nnIdx, nnSqDist);
+            float nnDist = std::numeric_limits<float>::infinity();
+            if (found > 0)
+                nnDist = std::sqrt(nnSqDist[0]);
+
+            int neighborCount = 0;
+            if (dynamicNeighborRadius > 1e-6f)
+            {
+                radiusIdx.clear();
+                radiusSqDist.clear();
+                neighborCount = kdtreeMap.radiusSearch(pt, dynamicNeighborRadius, radiusIdx, radiusSqDist);
+            }
+            else
+            {
+                neighborCount = found;
+            }
+
+            const float thresh = dynamicKnnMaxDistBase + dynamicKnnMaxDistScale * r;
+            const bool enoughNeighbors = (dynamicMinNeighbors <= 0) ? true : (neighborCount >= dynamicMinNeighbors);
+            const bool isDynamic = enoughNeighbors && (nnDist > thresh);
+
+            if (isDynamic)
+                dynamicCloudOut->push_back(pt);
+        }
+
+        if (!dynamicClusteringEnable || dynamicCloudOut->empty())
+            return;
+
+        // Keep a copy of raw dynamic points; we may filter dynamicCloudOut by clustering.
+        pcl::PointCloud<PointType>::Ptr rawDynamic(new pcl::PointCloud<PointType>());
+        pcl::copyPointCloud(*dynamicCloudOut, *rawDynamic);
+
+        pcl::search::KdTree<PointType>::Ptr tree(new pcl::search::KdTree<PointType>());
+        tree->setInputCloud(rawDynamic);
+        std::vector<pcl::PointIndices> clusterIndices;
+        pcl::EuclideanClusterExtraction<PointType> ec;
+        ec.setClusterTolerance(dynamicClusterTolerance);
+        ec.setMinClusterSize(dynamicClusterMinSize);
+        ec.setMaxClusterSize(dynamicClusterMaxSize);
+        ec.setSearchMethod(tree);
+        ec.setInputCloud(rawDynamic);
+        ec.extract(clusterIndices);
+
+        // Optionally filter dynamicCloudOut: keep only points that belong to extracted clusters.
+        if (dynamicFilterByCluster)
+        {
+            dynamicCloudOut->clear();
+            dynamicCloudOut->reserve(rawDynamic->size());
+        }
+
+        dynamicClusteredOut->reserve(rawDynamic->size());
+        centersOut.header.stamp = timeLaserInfoStamp;
+        centersOut.header.frame_id = odometryFrame;
+
+        int clusterId = 0;
+        for (const auto& indices : clusterIndices)
+        {
+            if (indices.indices.empty())
+                continue;
+
+            float minX = std::numeric_limits<float>::infinity();
+            float minY = std::numeric_limits<float>::infinity();
+            float minZ = std::numeric_limits<float>::infinity();
+            float maxX = -std::numeric_limits<float>::infinity();
+            float maxY = -std::numeric_limits<float>::infinity();
+            float maxZ = -std::numeric_limits<float>::infinity();
+
+            for (int idx : indices.indices)
+            {
+                // Clustered output uses intensity = clusterId (for visualization)
+                PointType p = rawDynamic->points[idx];
+                p.intensity = static_cast<float>(clusterId);
+                dynamicClusteredOut->push_back(p);
+
+                // Dynamic output keeps original intensity; optionally only keep clustered points.
+                if (dynamicFilterByCluster)
+                    dynamicCloudOut->push_back(rawDynamic->points[idx]);
+
+                minX = std::min(minX, p.x); minY = std::min(minY, p.y); minZ = std::min(minZ, p.z);
+                maxX = std::max(maxX, p.x); maxY = std::max(maxY, p.y); maxZ = std::max(maxZ, p.z);
+            }
+
+            const float cx = 0.5f * (minX + maxX);
+            const float cy = 0.5f * (minY + maxY);
+            const float cz = 0.5f * (minZ + maxZ);
+
+            geometry_msgs::Pose pose;
+            pose.position.x = cx;
+            pose.position.y = cy;
+            pose.position.z = cz;
+            pose.orientation.w = 1.0;
+            centersOut.poses.push_back(pose);
+
+            if (dynamicPublishMarkers)
+            {
+                visualization_msgs::Marker m;
+                m.header.stamp = timeLaserInfoStamp;
+                m.header.frame_id = odometryFrame;
+                m.ns = "dynamic_clusters";
+                m.id = clusterId;
+                m.type = visualization_msgs::Marker::CUBE;
+                m.action = visualization_msgs::Marker::ADD;
+                m.pose.position.x = cx;
+                m.pose.position.y = cy;
+                m.pose.position.z = cz;
+                m.pose.orientation.w = 1.0;
+                m.scale.x = std::max(0.05f, maxX - minX);
+                m.scale.y = std::max(0.05f, maxY - minY);
+                m.scale.z = std::max(0.05f, maxZ - minZ);
+                m.color.r = 1.0f;
+                m.color.g = 0.2f;
+                m.color.b = 0.2f;
+                m.color.a = 0.6f;
+                m.lifetime = ros::Duration(mappingProcessInterval * 2.0);
+                clustersMarkersOut.markers.push_back(m);
+            }
+
+            clusterId++;
+        }
+
+        // Publish DELETE markers if cluster count shrinks
+        if (dynamicPublishMarkers)
+        {
+            static int lastMarkerCount = 0;
+            for (int id = clusterId; id < lastMarkerCount; ++id)
+            {
+                visualization_msgs::Marker m;
+                m.header.stamp = timeLaserInfoStamp;
+                m.header.frame_id = odometryFrame;
+                m.ns = "dynamic_clusters";
+                m.id = id;
+                m.action = visualization_msgs::Marker::DELETE;
+                clustersMarkersOut.markers.push_back(m);
+            }
+            lastMarkerCount = clusterId;
+        }
     }
 
     void allocateMemory()
@@ -1623,8 +1834,77 @@ public:
         // save all the received edge and surf points
         pcl::PointCloud<PointType>::Ptr thisCornerKeyFrame(new pcl::PointCloud<PointType>());
         pcl::PointCloud<PointType>::Ptr thisSurfKeyFrame(new pcl::PointCloud<PointType>());
-        pcl::copyPointCloud(*laserCloudCornerLastDS,  *thisCornerKeyFrame);
-        pcl::copyPointCloud(*laserCloudSurfLastDS,    *thisSurfKeyFrame);
+
+        // Optional: exclude dynamic points from being written into the map.
+        // This helps avoid moving objects becoming part of the static map, which would later cause false negatives.
+        const bool filterForMap = dynamicPointEnable && dynamicExcludeFromMap;
+        auto mapLocal = filterForMap ? buildLocalMapCloud() : pcl::PointCloud<PointType>::Ptr();
+
+        if (!filterForMap || !mapLocal || mapLocal->empty())
+        {
+            pcl::copyPointCloud(*laserCloudCornerLastDS,  *thisCornerKeyFrame);
+            pcl::copyPointCloud(*laserCloudSurfLastDS,    *thisSurfKeyFrame);
+        }
+        else
+        {
+            // Build KD-tree on current local map (map frame)
+            pcl::KdTreeFLANN<PointType> kdtreeMap;
+            kdtreeMap.setInputCloud(mapLocal);
+
+            transPointAssociateToMap = trans2Affine3f(transformTobeMapped);
+
+            const int k = std::max(1, dynamicKnnK);
+            std::vector<int> nnIdx(k);
+            std::vector<float> nnSqDist(k);
+            std::vector<int> radiusIdx;
+            std::vector<float> radiusSqDist;
+
+            auto keepStaticPoints = [&](const pcl::PointCloud<PointType>::Ptr& in,
+                                        pcl::PointCloud<PointType>::Ptr& out)
+            {
+                out->clear();
+                out->reserve(in->size());
+                for (const auto& ptOri : in->points)
+                {
+                    PointType ptMap;
+                    pointAssociateToMap(const_cast<PointType*>(&ptOri), &ptMap);
+
+                    const float r = pointDistance(ptMap);
+                    if (dynamicMaxRange > 0.0f && r > dynamicMaxRange)
+                    {
+                        out->push_back(ptOri);
+                        continue;
+                    }
+
+                    int found = kdtreeMap.nearestKSearch(ptMap, k, nnIdx, nnSqDist);
+                    float nnDist = std::numeric_limits<float>::infinity();
+                    if (found > 0)
+                        nnDist = std::sqrt(nnSqDist[0]);
+
+                    int neighborCount = 0;
+                    if (dynamicNeighborRadius > 1e-6f)
+                    {
+                        radiusIdx.clear();
+                        radiusSqDist.clear();
+                        neighborCount = kdtreeMap.radiusSearch(ptMap, dynamicNeighborRadius, radiusIdx, radiusSqDist);
+                    }
+                    else
+                    {
+                        neighborCount = found;
+                    }
+
+                    const float thresh = dynamicKnnMaxDistBase + dynamicKnnMaxDistScale * r;
+                    const bool enoughNeighbors = (dynamicMinNeighbors <= 0) ? true : (neighborCount >= dynamicMinNeighbors);
+                    const bool isDynamic = enoughNeighbors && (nnDist > thresh);
+
+                    if (!isDynamic)
+                        out->push_back(ptOri);
+                }
+            };
+
+            keepStaticPoints(laserCloudCornerLastDS, thisCornerKeyFrame);
+            keepStaticPoints(laserCloudSurfLastDS, thisSurfKeyFrame);
+        }
 
         // save key frame cloud
         cornerCloudKeyFrames.push_back(thisCornerKeyFrame);
@@ -1773,13 +2053,44 @@ public:
             publishCloud(pubRecentKeyFrame, cloudOut, timeLaserInfoStamp, odometryFrame);
         }
         // publish registered high-res raw cloud
-        if (pubCloudRegisteredRaw.getNumSubscribers() != 0)
+        const bool wantDynamic = dynamicPointEnable && (
+            pubDynamicCloud.getNumSubscribers() != 0 ||
+            pubDynamicCloudClustered.getNumSubscribers() != 0 ||
+            pubDynamicClusters.getNumSubscribers() != 0 ||
+            pubDynamicClusterCenters.getNumSubscribers() != 0);
+
+        const bool needRegisteredCloud = (pubCloudRegisteredRaw.getNumSubscribers() != 0) || wantDynamic;
+
+        if (needRegisteredCloud)
         {
             pcl::PointCloud<PointType>::Ptr cloudOut(new pcl::PointCloud<PointType>());
             pcl::fromROSMsg(cloudInfo.cloud_deskewed, *cloudOut);
             PointTypePose thisPose6D = trans2PointTypePose(transformTobeMapped);
             *cloudOut = *transformPointCloud(cloudOut,  &thisPose6D);
-            publishCloud(pubCloudRegisteredRaw, cloudOut, timeLaserInfoStamp, odometryFrame);
+
+            if (pubCloudRegisteredRaw.getNumSubscribers() != 0)
+                publishCloud(pubCloudRegisteredRaw, cloudOut, timeLaserInfoStamp, odometryFrame);
+
+            if (wantDynamic)
+            {
+                pcl::PointCloud<PointType>::Ptr dynCloud;
+                pcl::PointCloud<PointType>::Ptr dynClustered;
+                visualization_msgs::MarkerArray markers;
+                geometry_msgs::PoseArray centers;
+                extractDynamicAndClusters(cloudOut, dynCloud, dynClustered, markers, centers);
+
+                if (dynCloud && pubDynamicCloud.getNumSubscribers() != 0)
+                    publishCloud(pubDynamicCloud, dynCloud, timeLaserInfoStamp, odometryFrame);
+
+                if (dynClustered && pubDynamicCloudClustered.getNumSubscribers() != 0)
+                    publishCloud(pubDynamicCloudClustered, dynClustered, timeLaserInfoStamp, odometryFrame);
+
+                if (dynamicPublishCenters && pubDynamicClusterCenters.getNumSubscribers() != 0)
+                    pubDynamicClusterCenters.publish(centers);
+
+                if (dynamicPublishMarkers && pubDynamicClusters.getNumSubscribers() != 0)
+                    pubDynamicClusters.publish(markers);
+            }
         }
         // publish path
         if (pubPath.getNumSubscribers() != 0)

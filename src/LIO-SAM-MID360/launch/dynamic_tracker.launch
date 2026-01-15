@@ -1,0 +1,7 @@
+<launch>
+  <arg name="config" default="$(find lio_sam)/config/dynamic_tracker.yaml"/>
+
+  <rosparam command="load" file="$(arg config)"/>
+
+  <node pkg="lio_sam" type="lio_sam_dynamicTracker" name="dynamic_tracker" output="screen" ns="/" />
+</launch>

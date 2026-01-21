@@ -1,0 +1,36 @@
+<launch>
+    <!-- One-time leveling for merged PointCloud2 using /merged_imu acceleration average -->
+    <!-- Note: if you only have Livox CustomMsg (e.g. /merged_livox), first convert it to PointCloud2
+      using: rosrun livox_lidar_rosbag_converter custommsg_to_pointcloud2
+      and then set cloud_topic to the converted PointCloud2 topic. -->
+
+  <arg name="imu_topic" default="/merged_imu" />
+  <arg name="imu_output_topic" default="/merged_imu_leveled" />
+  <arg name="cloud_topic" default="/merged_pointcloud" />
+  <arg name="output_topic" default="/merged_pointcloud_leveled" />
+
+  <arg name="livox_custom_topic" default="/merged_livox" />
+  <arg name="livox_custom_output_topic" default="/merged_livox_leveled" />
+
+  <!-- Calibration window; keep the crane hook still during this period -->
+  <arg name="calib_duration_sec" default="2.0" />
+  <arg name="min_imu_samples" default="800" />
+
+  <!-- If false, leveled topics start only after calibration (recommended) -->
+  <arg name="publish_before_calibrated" default="false" />
+
+  <node pkg="livox_merge" type="merged_pointcloud_leveler_node" name="merged_pointcloud_leveler" output="screen">
+    <param name="imu_topic" value="$(arg imu_topic)" />
+    <param name="imu_output_topic" value="$(arg imu_output_topic)" />
+    <param name="cloud_topic" value="$(arg cloud_topic)" />
+    <param name="output_topic" value="$(arg output_topic)" />
+
+    <param name="livox_custom_topic" value="$(arg livox_custom_topic)" />
+    <param name="livox_custom_output_topic" value="$(arg livox_custom_output_topic)" />
+
+    <param name="calib_duration_sec" value="$(arg calib_duration_sec)" />
+    <param name="min_imu_samples" value="$(arg min_imu_samples)" />
+
+    <param name="publish_before_calibrated" value="$(arg publish_before_calibrated)" />
+  </node>
+</launch>

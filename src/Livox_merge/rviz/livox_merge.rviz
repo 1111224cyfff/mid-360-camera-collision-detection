@@ -92,7 +92,7 @@ Visualization Manager:
       Color: 255; 255; 255
       Color Transformer: Intensity
       Decay Time: 0
-      Enabled: true
+      Enabled: false
       Invert Rainbow: false
       Max Color: 255; 255; 255
       Min Color: 0; 0; 0
@@ -101,9 +101,9 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.009999999776482582
+      Size (m): 0.05000000074505806
       Style: Flat Squares
-      Topic: /merged_pointcloud
+      Topic: /merged_pointcloud_leveled
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true

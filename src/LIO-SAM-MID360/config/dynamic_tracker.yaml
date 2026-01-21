@@ -9,8 +9,8 @@ dynamic_tracker:
   confirm_hits: 2                      # require 2 consecutive associations to confirm (fewer spurious IDs)
   confirm_window: 3
 
-  max_missed_frames: 20
-  max_missed_time: 2.0                 # [s]
+  max_missed_frames: 30
+  max_missed_time: 3.0                 # [s] tolerate brief detection dropouts
 
   # Simple 2D constant-velocity Kalman filter tuning
   process_noise_acc: 3.0               # [m/s^2]

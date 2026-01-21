@@ -72,14 +72,23 @@ include_directories(
 ## Add executable
 add_executable(merge_lidar_node src/MergeLidar.cpp)
 
+## One-time IMU-based pointcloud leveling node
+add_executable(merged_pointcloud_leveler_node src/merged_pointcloud_leveler_node.cpp)
+
 ## Add cmake target dependencies of the executable
 add_dependencies(merge_lidar_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+add_dependencies(merged_pointcloud_leveler_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(merge_lidar_node
   ${catkin_LIBRARIES}
   ${PCL_LIBRARIES}
   OpenMP::OpenMP_CXX
+)
+
+target_link_libraries(merged_pointcloud_leveler_node
+  ${catkin_LIBRARIES}
 )
 
 ## Compiler-specific options
@@ -100,6 +109,10 @@ catkin_install_python(PROGRAMS
 
 ## Mark executables for installation
 install(TARGETS merge_lidar_node
+  RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+
+install(TARGETS merged_pointcloud_leveler_node
   RUNTIME DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

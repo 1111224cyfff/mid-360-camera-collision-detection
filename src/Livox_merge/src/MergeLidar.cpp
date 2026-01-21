@@ -190,6 +190,10 @@ private:
     int imu_select_index = -1; // 优先使用索引
     std::string imu_select_topic_contains; // 或者按话题关键字匹配
     std::vector<std::string> imu_topics_cfg; // 保存读取到的IMU话题，便于匹配
+
+    // Buffer / publishing policy (from YAML buffers/*)
+    size_t max_imu_buffer_size_ = 200;
+    double imu_time_epsilon_ = 1e-6;
     
 public:
     // Destructor
@@ -222,6 +226,16 @@ public:
                 nh_ptr->param("imu_publish_mode", imu_publish_mode, std::string("time_sorted"));
                 nh_ptr->param("imu_select_index", imu_select_index, -1);
                 nh_ptr->param("imu_select_topic_contains", imu_select_topic_contains, std::string(""));
+
+                // Read sync + buffer settings (nested YAML)
+                nh_ptr->param("sync_frequency", sync_frequency, 20.0);
+                if (sync_frequency <= 0.0)
+                    sync_frequency = 20.0;
+                sync_period = 1.0 / sync_frequency;
+                int max_imu_buf = 200;
+                nh_ptr->param("buffers/max_imu_buffer_size", max_imu_buf, 200);
+                if (max_imu_buf < 50) max_imu_buf = 50;
+                max_imu_buffer_size_ = static_cast<size_t>(max_imu_buf);
                 if (imu_select_index < 0 && !imu_select_topic_contains.empty())
                 {
                     for (int i = 0; i < (int)imu_topics_cfg.size(); ++i)
@@ -762,8 +776,7 @@ public:
         imu_buf[idx].push_back(ImuPacket(timestamp, transformed_imu));
         
         // 限制缓冲区大小 - IMU频率通常较高，需要更大的缓冲区
-        const size_t MAX_IMU_BUFFER_SIZE = 200;
-        if(imu_buf[idx].size() > MAX_IMU_BUFFER_SIZE)
+        if(imu_buf[idx].size() > max_imu_buffer_size_)
         {
             imu_buf[idx].pop_front();
             if(imu_handler_count % 500 == 0)
@@ -1128,10 +1141,10 @@ public:
                     break;
                 }
             }
-            while(!imu_buf[i].empty() && imu_buf[i].front().timestamp < start_time - 0.1)
-            {
+            // Important for LIO-SAM: do not republish the same IMU samples across sync windows.
+            // Once a window [start_time, end_time] has been processed, samples <= end_time are no longer needed.
+            while(!imu_buf[i].empty() && imu_buf[i].front().timestamp <= end_time + imu_time_epsilon_)
                 imu_buf[i].pop_front();
-            }
         };
 
         if (imu_publish_mode == "select" && imu_select_index >= 0)
@@ -1196,8 +1209,13 @@ public:
             // time_sorted 或 select：按时间顺序逐条发布
             sort(all_imu_data.begin(), all_imu_data.end(), 
                  [](const ImuPacket &a, const ImuPacket &b) { return a.timestamp < b.timestamp; });
+            double last_pub = -std::numeric_limits<double>::infinity();
             for(const auto &imu_packet : all_imu_data)
             {
+                // Skip duplicates or non-increasing stamps within this window
+                if (imu_packet.timestamp <= last_pub + imu_time_epsilon_)
+                    continue;
+                last_pub = imu_packet.timestamp;
                 sensor_msgs::Imu imu_msg = imu_packet.imu_data;
                 imu_msg.header.stamp = ros::Time(imu_packet.timestamp);
                 imu_msg.header.frame_id = "body";

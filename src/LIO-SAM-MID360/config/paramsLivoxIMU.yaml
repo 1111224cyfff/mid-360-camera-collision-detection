@@ -2,8 +2,8 @@
 lio_sam:
 
   # Topics
-  pointCloudTopic: "/merged_livox"               # Point cloud data
-  imuTopic: "/merged_imu"                         # IMU data
+  pointCloudTopic: "/merged_livox_leveled"       # Point cloud data (gravity-aligned)
+  imuTopic: "/merged_imu_leveled"               # IMU data (gravity-aligned)
   odomTopic: "odometry/imu"                   # IMU pre-preintegration odometry, same frequency as IMU
   gpsTopic: "odometry/gpsz"                   # GPS odometry topic from navsat, see module_navsat.launch file
 
@@ -96,8 +96,11 @@ lio_sam:
   dynamic_point_detection:
     enabled: true
     knn_k: 5
-    knn_max_dist_base: 0.20
-    knn_max_dist_scale: 0.0
+    # If dynamic detection is intermittent (targets sometimes disappear),
+    # slightly lower the base threshold to be more sensitive.
+    # Add a small range scale to avoid over-triggering far points.
+    knn_max_dist_base: 0.15
+    knn_max_dist_scale: 0.01
     neighbor_radius: 0.60
     min_neighbors: 0
     downsample_leaf_size: 0.05
@@ -108,7 +111,7 @@ lio_sam:
     clustering_enabled: true
     filter_by_cluster: true
     cluster_tolerance: 0.22
-    cluster_min_size: 60
+    cluster_min_size: 80
     cluster_max_size: 20000
     publish_markers: true
     publish_centers: true

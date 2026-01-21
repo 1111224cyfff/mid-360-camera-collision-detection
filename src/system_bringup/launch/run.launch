@@ -5,18 +5,19 @@
   <!-- 启动 Livox merge -->
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
 
+  <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
+  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
+
   <!-- 启动 LIO-SAM (6-axis) -->
   <include file="$(find lio_sam)/launch/run6axis.launch" />
+  
 
  <!-- 启动 dynamic tracker -->
-  <include file="$(find lio_sam)/launch/dynamic_tracker.launch" />
-
-   <!-- Route-2: local occupancy + warning -->
-    <include file="$(find lio_sam)/launch/route2_warning.launch" />
+  <!-- <include file="$(find lio_sam)/launch/dynamic_tracker.launch" /> -->
 
   <!-- 固定 rosbag 播放（延时3秒，确保订阅者就绪） -->
   <node pkg="rosbag" type="play" name="rosbag_play"
-        args="/home/nvidia/ws_livox/src/livox_ros_driver2/data/dynamic_zhangjiang_20260115.bag"
+        args="/home/nvidia/ws_livox/src/livox_ros_driver2/data/zhangjiang20260120.bag"
         launch-prefix="bash -c 'sleep 3; exec $0 $@'"
         output="screen" />
 

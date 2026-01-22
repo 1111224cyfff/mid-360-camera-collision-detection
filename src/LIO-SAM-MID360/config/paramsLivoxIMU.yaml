@@ -25,7 +25,10 @@ lio_sam:
 
   # Sensor Settings
   sensor: livox                            # lidar sensor type, 'velodyne' or 'ouster' or 'livox'
-  N_SCAN: 4                                  # number of lidar channel (i.e., Velodyne/Ouster: 16, 32, 64, 128, Livox Horizon: 6)
+  # 注意：当前点云来自 livox_merge 的 /merged_livox（两台 MID360 合并），
+  # merge 后 line(=ring) 范围会变成 0..7。
+  # 若这里仍为 4，lio_sam/imageProjection 会丢弃 line>=4 的点，看起来就像“只有一边”。
+  N_SCAN: 8                                  # number of lidar channel (merged dual MID360: 8)
   Horizon_SCAN: 6000                          # lidar horizontal resolution (Velodyne:1800, Ouster:512,1024,2048, Livox Horizon: 4000)
   downsampleRate: 1                           # default: 1. Downsample your data if too many points. i.e., 16 = 64 / 4, 16 = 16 / 1
   lidarMinRange: 1.0                          # default: 1.0, minimum lidar range to be used
@@ -38,7 +41,9 @@ lio_sam:
   imuAccBiasN: 0.0002
   imuGyrBiasN: 0.00003
   imuGravity: 9.8035
-  imuRPYWeight: 0.00
+  # Roll/Pitch 融合权重：0 会完全不使用 IMU 的 roll/pitch 约束，容易出现姿态漂移导致地图“歪/飘”。
+  # 一般建议从 0.01 开始（室内/震动大可略调大）。
+  imuRPYWeight: 0.01
 
   extrinsicTrans: [0.0, 0.0, 0]
   extrinsicRot: [1, 0, 0,
@@ -94,24 +99,26 @@ lio_sam:
   #   - /lio_sam/mapping/dynamic_clusters
   #   - /lio_sam/mapping/dynamic_cluster_centers
   dynamic_point_detection:
+    # 调试/建图建议先关闭动态点剔除：该模块若过于激进会把大量近距离点当成动态点剔除，
+    # 造成特征不足、末尾几秒看起来像“漂移/发散”。
     enabled: true
     knn_k: 5
     # If dynamic detection is intermittent (targets sometimes disappear),
     # slightly lower the base threshold to be more sensitive.
     # Add a small range scale to avoid over-triggering far points.
-    knn_max_dist_base: 0.15
+    knn_max_dist_base: 0.20
     knn_max_dist_scale: 0.01
-    neighbor_radius: 0.60
-    min_neighbors: 0
-    downsample_leaf_size: 0.05
-    max_range: 6.0
+    neighbor_radius: 0.80
+    min_neighbors: 1
+    downsample_leaf_size: 0.10
+    max_range: 12.0
     publish_static: false
     exclude_from_map: true
 
     clustering_enabled: true
-    filter_by_cluster: true
-    cluster_tolerance: 0.22
-    cluster_min_size: 80
+    filter_by_cluster: false
+    cluster_tolerance: 0.30
+    cluster_min_size: 30
     cluster_max_size: 20000
     publish_markers: true
     publish_centers: true

@@ -1,0 +1,11 @@
+int32 class_id
+string class_name
+float32 confidence
+float32 left
+float32 top
+float32 right
+float32 bottom
+int32 track_id
+int32 track_status
+int32 track_frames
+int32 track_lost

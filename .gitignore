@@ -30,3 +30,6 @@ __pycache__/
 
 # OS
 .DS_Store
+
+#
+src/CMakeLists.txt

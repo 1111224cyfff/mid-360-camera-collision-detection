@@ -14,9 +14,10 @@ from collections import deque
 class ImuTimeOrderMonitor:
     def __init__(self):
         rospy.init_node('imu_time_order_monitor', anonymous=True)
-        
-        # 订阅合并后的IMU数据
-        self.imu_sub = rospy.Subscriber('/livox_merge/merged_imu', Imu, self.imu_callback)
+
+        # 订阅合并后的IMU数据（默认与 MergeLidar.cpp 一致：/merged_imu）
+        self.imu_topic = rospy.get_param('~imu_topic', '/merged_imu')
+        self.imu_sub = rospy.Subscriber(self.imu_topic, Imu, self.imu_callback)
         
         # 统计信息
         self.imu_count = 0
@@ -27,29 +28,9 @@ class ImuTimeOrderMonitor:
         self.time_diffs = deque(maxlen=999)   # 时间差
         
         print("Livox IMU Time Order Monitor Started")
-        print("Monitoring topic: /livox_merge/merged_imu")
+        print(f"Monitoring topic: {self.imu_topic}")
         print("Checking for time-ordered IMU data from multiple sensors")
         print("=" * 60)
-    
-    def imu_callback(self, msg):
-        current_timestamp = msg.header.stamp.to_sec()
-        self.imu_count += 1
-        
-        # 检查时间顺序
-        if self.last_timestamp is not None:
-            time_diff = current_timestamp - self.last_timestamp
-            self.time_diffs.append(time_diff)
-            
-            if current_timestamp < self.last_timestamp:
-                self.out_of_order_count += 1
-                print(f"⚠️  Out-of-order IMU data detected! Previous: {self.last_timestamp:.6f}, Current: {current_timestamp:.6f}")
-        
-        self.timestamps.append(current_timestamp)
-        self.last_timestamp = current_timestamp
-        
-        # 每100个IMU消息输出一次统计
-        if self.imu_count % 100 == 0:
-            self.print_statistics()
     
     def print_statistics(self):
         elapsed_time = time.time() - self.start_time
@@ -93,10 +74,10 @@ class ImuTimeOrderMonitor:
             print(f"   Timestamp: {msg.header.stamp.to_sec():.6f}")
             print(f"   Frame ID: {msg.header.frame_id}")
             
-            # 线性加速度
+            # 线性加速度（注意：不同驱动可能是 m/s^2 或 g，MID360 常见为“g”量纲）
             linear_acc = msg.linear_acceleration
             acc_magnitude = np.sqrt(linear_acc.x**2 + linear_acc.y**2 + linear_acc.z**2)
-            print(f"   Linear acceleration: [{linear_acc.x:.3f}, {linear_acc.y:.3f}, {linear_acc.z:.3f}] (|a|={acc_magnitude:.3f} m/s²)")
+            print(f"   Linear acceleration (raw): [{linear_acc.x:.3f}, {linear_acc.y:.3f}, {linear_acc.z:.3f}] (|a|={acc_magnitude:.3f})")
             
             # 角速度
             angular_vel = msg.angular_velocity
@@ -108,25 +89,28 @@ class ImuTimeOrderMonitor:
             q_magnitude = np.sqrt(orientation.w**2 + orientation.x**2 + orientation.y**2 + orientation.z**2)
             print(f"   Orientation: [{orientation.w:.3f}, {orientation.x:.3f}, {orientation.y:.3f}, {orientation.z:.3f}] (|q|={q_magnitude:.3f})")
     
+
     def imu_callback(self, msg):
         current_timestamp = msg.header.stamp.to_sec()
         self.imu_count += 1
-        
+
         # 分析IMU数据
         self.analyze_imu_data(msg)
-        
+
         # 检查时间顺序
         if self.last_timestamp is not None:
             time_diff = current_timestamp - self.last_timestamp
             self.time_diffs.append(time_diff)
-            
+
             if current_timestamp < self.last_timestamp:
                 self.out_of_order_count += 1
-                print(f"⚠️  Out-of-order IMU data detected! Previous: {self.last_timestamp:.6f}, Current: {current_timestamp:.6f}")
-        
+                print(
+                    f"Out-of-order IMU data detected! Previous: {self.last_timestamp:.6f}, Current: {current_timestamp:.6f}"
+                )
+
         self.timestamps.append(current_timestamp)
         self.last_timestamp = current_timestamp
-        
+
         # 每100个IMU消息输出一次统计
         if self.imu_count % 100 == 0:
             self.print_statistics()

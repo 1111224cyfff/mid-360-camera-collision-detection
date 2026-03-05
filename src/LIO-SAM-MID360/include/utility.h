@@ -171,6 +171,8 @@ public:
     float dynamicClusterTolerance;
     int   dynamicClusterMinSize;
     int   dynamicClusterMaxSize;
+    float dynamicConfidenceThreshold;
+    float dynamicConfidenceScale;
 
     ParamServer()
     {
@@ -291,6 +293,10 @@ public:
         nh.param<int>("lio_sam/dynamic_point_detection/cluster_max_size", dynamicClusterMaxSize, 50000);
         nh.param<bool>("lio_sam/dynamic_point_detection/publish_markers", dynamicPublishMarkers, true);
         nh.param<bool>("lio_sam/dynamic_point_detection/publish_centers", dynamicPublishCenters, true);
+
+        // Confidence parameters for dynamic points
+        nh.param<float>("lio_sam/dynamic_point_detection/confidence_threshold", dynamicConfidenceThreshold, 0.5f);
+        nh.param<float>("lio_sam/dynamic_point_detection/confidence_scale", dynamicConfidenceScale, 0.2f);
 
         usleep(100);
     }

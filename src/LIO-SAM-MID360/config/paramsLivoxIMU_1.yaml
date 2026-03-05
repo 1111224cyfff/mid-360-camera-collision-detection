@@ -90,7 +90,7 @@ lio_sam:
   # Dynamic point identification + clustering (for obstacle candidates)
   # Topics:
   #   - /lio_sam/mapping/cloud_dynamic
-  #   - /lio_sam/mapping/cloud_dynamic_clustered
+  #   - /lio_sam/mapping/cloud_dynamic_low
   #   - /lio_sam/mapping/dynamic_clusters
   #   - /lio_sam/mapping/dynamic_cluster_centers
   dynamic_point_detection:
@@ -103,6 +103,10 @@ lio_sam:
     downsample_leaf_size: 0.25
     max_range: -1.0
     publish_static: false
+
+    # Confidence parameters (high = red, low = gray)
+    confidence_threshold: 0.5        # [-] >= threshold -> high confidence (red)
+    confidence_scale: 0.2            # [m] (nn_dist - thresh) / scale -> confidence
 
     clustering_enabled: true
     cluster_tolerance: 0.6

@@ -1,6 +1,11 @@
 <launch>
-  <!-- 固定使用仿真时钟 -->
-  <param name="/use_sim_time" value="false" />
+  <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/src/livox_ros_driver2/data/zhangjiang20260120.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" />
+  <arg name="detector_rviz" default="true" />
+  <!-- rosbag 回放建议启用仿真时钟，并让 rosbag 发布 /clock -->
+  <param name="/use_sim_time" value="true" />
+
 
   <!-- 启动 Livox merge -->
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
@@ -10,15 +15,22 @@
 
   <!-- 启动 LIO-SAM (6-axis) -->
   <include file="$(find lio_sam)/launch/run6axis.launch" />
+
+  <!-- 启动 M-detector (MID360) -->
+  <include file="$(find m_detector)/launch/detector_mid360_lio_sam.launch">
+    <arg name="rviz" value="$(arg detector_rviz)" />
+    <arg name="rviz_node_name" value="m_detector_rviz" />
+  </include>
+
   
 
  <!-- 启动 dynamic tracker -->
   <!-- <include file="$(find lio_sam)/launch/dynamic_tracker.launch" /> -->
 
-  <!-- 固定 rosbag 播放（延时3秒，确保订阅者就绪） -->
+  <!-- 固定 rosbag 播放（延时2秒，确保订阅者就绪） -->
   <node pkg="rosbag" type="play" name="rosbag_play"
-        args="/home/nvidia/ws_livox/src/livox_ros_driver2/data/zhangjiang20260120.bag"
-        launch-prefix="bash -c 'sleep 3; exec $0 $@'"
+      args="--clock $(arg bag_file)"
+        launch-prefix="bash -c 'sleep 2; exec $0 $@'"
         output="screen" />
 
 </launch>

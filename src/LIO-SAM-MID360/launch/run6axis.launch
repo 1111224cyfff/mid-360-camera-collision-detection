@@ -2,8 +2,8 @@
 
     <arg name="project" default="lio_sam"/>
 
-    <!-- 指定打印输出的日志等级 -->
-    <env name="ROSCONSOLE_CONFIG_FILE" value="$(find lio_sam)/launch/include/rosconsole/rosconsole_error.conf"/>
+    <!-- 指定打印输出的日志等级（调试启动抖动/等待IMU等问题时建议用 warn/info） -->
+    <env name="ROSCONSOLE_CONFIG_FILE" value="$(find lio_sam)/launch/include/rosconsole/rosconsole_warn.conf"/>
     
     <!-- Parameters -->
     <rosparam file="$(find lio_sam)/config/paramsLivoxIMU.yaml" command="load" />

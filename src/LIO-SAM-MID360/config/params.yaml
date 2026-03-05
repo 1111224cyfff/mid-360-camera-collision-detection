@@ -102,7 +102,7 @@ lio_sam:
   # Dynamic point identification (scan-to-map residual based)
   # Outputs:
   #   - /lio_sam/mapping/cloud_dynamic
-  #   - /lio_sam/mapping/cloud_dynamic_clustered
+  #   - /lio_sam/mapping/cloud_dynamic_low
   #   - /lio_sam/mapping/dynamic_clusters (MarkerArray)
   #   - /lio_sam/mapping/dynamic_cluster_centers (PoseArray)
   dynamic_point_detection:
@@ -118,6 +118,10 @@ lio_sam:
     exclude_from_map: false
     max_range: -1.0                   # [m] <=0 disables (useful to focus near-field)
     publish_static: false
+
+    # Confidence parameters (high = red, low = gray)
+    confidence_threshold: 0.5        # [-] >= threshold -> high confidence (red)
+    confidence_scale: 0.2            # [m] (nn_dist - thresh) / scale -> confidence
 
     # If true, publish /cloud_dynamic with only points that belong to valid clusters.
     # This is useful to suppress isolated false positives.

@@ -114,6 +114,9 @@ lio_sam:
     plane_max_dist: 0.25              # [m] point-to-plane distance threshold
     plane_neighbor_max_dist: 0.2      # [m] validate local plane using neighbors
     downsample_leaf_size: 0.0         # [m] 0 disables downsampling of input cloud
+      # Confidence parameters (high = red, low = gray)
+      confidence_threshold: 0.5        # [-] >= threshold -> high confidence (red)
+      confidence_scale: 0.2            # [m] (nn_dist - thresh) / scale -> confidence
 
 
 

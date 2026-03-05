@@ -1,4 +1,16 @@
-# judge which cmake codes to use 
+# judge which cmake codes to use
+#
+# In catkin/ROS1 builds, ROS_EDITION is often not passed as a CMake variable.
+# Default to ROS1 when we can detect a ROS1 environment so that message headers
+# (e.g. livox_ros_driver2/CustomMsg.h) get generated.
+if(NOT DEFINED ROS_EDITION OR ROS_EDITION STREQUAL "")
+  if(DEFINED ENV{ROS_VERSION} AND "$ENV{ROS_VERSION}" STREQUAL "1")
+    set(ROS_EDITION "ROS1")
+  elseif(DEFINED CATKIN_DEVEL_PREFIX)
+    set(ROS_EDITION "ROS1")
+  endif()
+endif()
+
 if(ROS_EDITION STREQUAL "ROS1")
 
   # Copyright(c) 2019 livoxtech limited.

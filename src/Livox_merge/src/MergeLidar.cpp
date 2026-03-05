@@ -194,6 +194,10 @@ private:
     // Buffer / publishing policy (from YAML buffers/*)
     size_t max_imu_buffer_size_ = 200;
     double imu_time_epsilon_ = 1e-6;
+    // Keep IMU stamps globally non-decreasing across PublishTimeSortedImu() calls.
+    // This guards against non-monotonic LiDAR sync windows (e.g. multi-sensor interleaving)
+    // which can otherwise produce negative dt in downstream IMU integration.
+    double last_pub_global_imu_ = -std::numeric_limits<double>::infinity();
     
 public:
     // Destructor
@@ -1191,7 +1195,15 @@ public:
 
             sensor_msgs::Imu fused;
             fused.header.frame_id = "body";
-            fused.header.stamp = ros::Time(0.5*(start_time+end_time));
+            const double fused_stamp = 0.5 * (start_time + end_time);
+            if (fused_stamp <= last_pub_global_imu_ + imu_time_epsilon_)
+            {
+                ROS_WARN_THROTTLE(2.0,
+                                  "[livox_merge] Non-monotonic fused IMU stamp (%.6f <= %.6f). Skipping.",
+                                  fused_stamp, last_pub_global_imu_);
+                return;
+            }
+            fused.header.stamp = ros::Time(fused_stamp);
             fused.linear_acceleration.x = acc_avg.x();
             fused.linear_acceleration.y = acc_avg.y();
             fused.linear_acceleration.z = acc_avg.z();
@@ -1203,6 +1215,7 @@ public:
             fused.orientation.y = q_avg.y();
             fused.orientation.z = q_avg.z();
             merged_imu_pub.publish(fused);
+            last_pub_global_imu_ = fused_stamp;
         }
         else
         {
@@ -1212,6 +1225,9 @@ public:
             double last_pub = -std::numeric_limits<double>::infinity();
             for(const auto &imu_packet : all_imu_data)
             {
+                // Enforce global monotonicity across windows
+                if (imu_packet.timestamp <= last_pub_global_imu_ + imu_time_epsilon_)
+                    continue;
                 // Skip duplicates or non-increasing stamps within this window
                 if (imu_packet.timestamp <= last_pub + imu_time_epsilon_)
                     continue;
@@ -1220,6 +1236,7 @@ public:
                 imu_msg.header.stamp = ros::Time(imu_packet.timestamp);
                 imu_msg.header.frame_id = "body";
                 merged_imu_pub.publish(imu_msg);
+                last_pub_global_imu_ = imu_packet.timestamp;
             }
         }
         

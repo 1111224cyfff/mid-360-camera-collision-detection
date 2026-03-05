@@ -1,0 +1,18 @@
+<launch>
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" />
+
+  <!-- Reuse existing bringup (LIO-SAM/Livox pipeline + rosbag play) -->
+  <include file="$(find system_bringup)/launch/run.launch">
+    <arg name="bag_file" value="$(arg bag_file)" />
+  </include>
+
+  <!-- Vision detection + tracking on the bag camera stream -->
+  <include file="$(find jetson_vision_detect)/launch/detect_track_from_bag.launch">
+    <arg name="image_topic" value="/hikrobot_camera/rgb/compressed" />
+    <arg name="use_compressed" value="true" />
+    <!-- Change model to e.g. dashcamnet/trafficcamnet/peoplenet when installed -->
+    <arg name="model" value="ssd-mobilenet-v2" />
+    <arg name="threshold" value="0.5" />
+    <arg name="enable_tracking" value="true" />
+  </include>
+</launch>

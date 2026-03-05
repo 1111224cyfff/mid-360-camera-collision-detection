@@ -96,12 +96,12 @@ lio_sam:
   # Topics:
   #   - /lio_sam/mapping/cloud_dynamic
   #   - /lio_sam/mapping/cloud_dynamic_clustered
+  #   - /lio_sam/mapping/cloud_dynamic_low
   #   - /lio_sam/mapping/dynamic_clusters
   #   - /lio_sam/mapping/dynamic_cluster_centers
   dynamic_point_detection:
-    # 调试/建图建议先关闭动态点剔除：该模块若过于激进会把大量近距离点当成动态点剔除，
-    # 造成特征不足、末尾几秒看起来像“漂移/发散”。
-    enabled: true
+    # 调试/建图建议先关闭动态点剔除：该模块若过于激进会把大量近距离点当成动态点剔除
+    enabled: false
     knn_k: 5
     # If dynamic detection is intermittent (targets sometimes disappear),
     # slightly lower the base threshold to be more sensitive.
@@ -115,8 +115,12 @@ lio_sam:
     publish_static: false
     exclude_from_map: true
 
-    clustering_enabled: true
-    filter_by_cluster: false
+    # Confidence parameters (high = red, low = gray)
+    confidence_threshold: 0.5        # [-] >= threshold -> high confidence (red)
+    confidence_scale: 0.2            # [m] (nn_dist - thresh) / scale -> confidence
+
+    clustering_enabled: false
+    filter_by_cluster: true
     cluster_tolerance: 0.30
     cluster_min_size: 30
     cluster_max_size: 20000

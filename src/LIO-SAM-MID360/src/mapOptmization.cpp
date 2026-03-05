@@ -7,6 +7,8 @@
 #include <pcl/segmentation/extract_clusters.h>
 #include <pcl/search/kdtree.h>
 
+#include <numeric>
+
 #include <gtsam/geometry/Rot3.h>
 #include <gtsam/geometry/Pose3.h>
 #include <gtsam/slam/PriorFactor.h>
@@ -79,6 +81,7 @@ public:
     ros::Publisher pubLoopConstraintEdge;
 
     ros::Publisher pubDynamicCloud;
+    ros::Publisher pubDynamicCloudLow;
     ros::Publisher pubDynamicCloudClustered;
     ros::Publisher pubDynamicClusters;
     ros::Publisher pubDynamicClusterCenters;
@@ -165,7 +168,6 @@ public:
     Eigen::Affine3f incrementalOdometryAffineFront;
     Eigen::Affine3f incrementalOdometryAffineBack;
 
-
     mapOptimization()
     {
         ISAM2Params parameters;
@@ -194,6 +196,7 @@ public:
         pubCloudRegisteredRaw = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_registered_raw", 1);
 
         pubDynamicCloud           = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_dynamic", 1);
+        pubDynamicCloudLow        = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_dynamic_low", 1);
         pubDynamicCloudClustered  = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/cloud_dynamic_clustered", 1);
         pubDynamicClusters        = nh.advertise<visualization_msgs::MarkerArray>("lio_sam/mapping/dynamic_clusters", 1);
         pubDynamicClusterCenters  = nh.advertise<geometry_msgs::PoseArray>("lio_sam/mapping/dynamic_cluster_centers", 1);
@@ -217,14 +220,16 @@ public:
         return mapLocal;
     }
 
-    void extractDynamicAndClusters(
+    void extractDynamicWithConfidence(
         const pcl::PointCloud<PointType>::Ptr& registeredCloud,
-        pcl::PointCloud<PointType>::Ptr& dynamicCloudOut,
+        pcl::PointCloud<PointType>::Ptr& dynamicHighOut,
+        pcl::PointCloud<PointType>::Ptr& dynamicLowOut,
         pcl::PointCloud<PointType>::Ptr& dynamicClusteredOut,
         visualization_msgs::MarkerArray& clustersMarkersOut,
         geometry_msgs::PoseArray& centersOut)
     {
-        dynamicCloudOut.reset(new pcl::PointCloud<PointType>());
+        dynamicHighOut.reset(new pcl::PointCloud<PointType>());
+        dynamicLowOut.reset(new pcl::PointCloud<PointType>());
         dynamicClusteredOut.reset(new pcl::PointCloud<PointType>());
         clustersMarkersOut.markers.clear();
         centersOut.poses.clear();
@@ -258,7 +263,10 @@ public:
         std::vector<int> radiusIdx;
         std::vector<float> radiusSqDist;
 
-        dynamicCloudOut->reserve(testCloud->size());
+        pcl::PointCloud<PointType>::Ptr rawDynamic(new pcl::PointCloud<PointType>());
+        rawDynamic->reserve(testCloud->size());
+        std::vector<float> rawConfidence;
+        rawConfidence.reserve(testCloud->size());
 
         for (const auto& pt : testCloud->points)
         {
@@ -288,43 +296,63 @@ public:
             const bool isDynamic = enoughNeighbors && (nnDist > thresh);
 
             if (isDynamic)
-                dynamicCloudOut->push_back(pt);
+            {
+                const float denom = std::max(1e-3f, dynamicConfidenceScale);
+                const float conf = std::min(1.0f, std::max(0.0f, (nnDist - thresh) / denom));
+                rawDynamic->push_back(pt);
+                rawConfidence.push_back(conf);
+
+                if (conf >= dynamicConfidenceThreshold)
+                    dynamicHighOut->push_back(pt);
+                else
+                    dynamicLowOut->push_back(pt);
+            }
         }
 
-        if (!dynamicClusteringEnable || dynamicCloudOut->empty())
+        if (rawDynamic->empty())
             return;
 
-        // Keep a copy of raw dynamic points; we may filter dynamicCloudOut by clustering.
-        pcl::PointCloud<PointType>::Ptr rawDynamic(new pcl::PointCloud<PointType>());
-        pcl::copyPointCloud(*dynamicCloudOut, *rawDynamic);
-
-        pcl::search::KdTree<PointType>::Ptr tree(new pcl::search::KdTree<PointType>());
-        tree->setInputCloud(rawDynamic);
+        // Cluster candidates (preferred). If disabled, treat all candidates as one cluster.
         std::vector<pcl::PointIndices> clusterIndices;
-        pcl::EuclideanClusterExtraction<PointType> ec;
-        ec.setClusterTolerance(dynamicClusterTolerance);
-        ec.setMinClusterSize(dynamicClusterMinSize);
-        ec.setMaxClusterSize(dynamicClusterMaxSize);
-        ec.setSearchMethod(tree);
-        ec.setInputCloud(rawDynamic);
-        ec.extract(clusterIndices);
-
-        // Optionally filter dynamicCloudOut: keep only points that belong to extracted clusters.
-        if (dynamicFilterByCluster)
+        if (dynamicClusteringEnable)
         {
-            dynamicCloudOut->clear();
-            dynamicCloudOut->reserve(rawDynamic->size());
+            pcl::search::KdTree<PointType>::Ptr tree(new pcl::search::KdTree<PointType>());
+            tree->setInputCloud(rawDynamic);
+            pcl::EuclideanClusterExtraction<PointType> ec;
+            ec.setClusterTolerance(dynamicClusterTolerance);
+            ec.setMinClusterSize(dynamicClusterMinSize);
+            ec.setMaxClusterSize(dynamicClusterMaxSize);
+            ec.setSearchMethod(tree);
+            ec.setInputCloud(rawDynamic);
+            ec.extract(clusterIndices);
+        }
+        else
+        {
+            pcl::PointIndices all;
+            all.indices.resize(rawDynamic->size());
+            std::iota(all.indices.begin(), all.indices.end(), 0);
+            clusterIndices.push_back(std::move(all));
         }
 
-        dynamicClusteredOut->reserve(rawDynamic->size());
-        centersOut.header.stamp = timeLaserInfoStamp;
-        centersOut.header.frame_id = odometryFrame;
+        struct ClusterObs
+        {
+            Eigen::Vector3f center{Eigen::Vector3f::Zero()};
+            pcl::PointCloud<PointType>::Ptr pts;
+            std::vector<int> idx;
+        };
 
-        int clusterId = 0;
+        std::vector<ClusterObs> clusters;
+        clusters.reserve(clusterIndices.size());
+
         for (const auto& indices : clusterIndices)
         {
             if (indices.indices.empty())
                 continue;
+
+            pcl::PointCloud<PointType>::Ptr pts(new pcl::PointCloud<PointType>());
+            pts->reserve(indices.indices.size());
+
+            ClusterObs c;
 
             float minX = std::numeric_limits<float>::infinity();
             float minY = std::numeric_limits<float>::infinity();
@@ -335,14 +363,9 @@ public:
 
             for (int idx : indices.indices)
             {
-                // Clustered output uses intensity = clusterId (for visualization)
-                PointType p = rawDynamic->points[idx];
-                p.intensity = static_cast<float>(clusterId);
-                dynamicClusteredOut->push_back(p);
-
-                // Dynamic output keeps original intensity; optionally only keep clustered points.
-                if (dynamicFilterByCluster)
-                    dynamicCloudOut->push_back(rawDynamic->points[idx]);
+                const auto& p = rawDynamic->points[idx];
+                pts->push_back(p);
+                c.idx.push_back(idx);
 
                 minX = std::min(minX, p.x); minY = std::min(minY, p.y); minZ = std::min(minZ, p.z);
                 maxX = std::max(maxX, p.x); maxY = std::max(maxY, p.y); maxZ = std::max(maxZ, p.z);
@@ -352,12 +375,61 @@ public:
             const float cy = 0.5f * (minY + maxY);
             const float cz = 0.5f * (minZ + maxZ);
 
-            geometry_msgs::Pose pose;
-            pose.position.x = cx;
-            pose.position.y = cy;
-            pose.position.z = cz;
-            pose.orientation.w = 1.0;
-            centersOut.poses.push_back(pose);
+            c.center = Eigen::Vector3f(cx, cy, cz);
+            c.pts = pts;
+            clusters.push_back(std::move(c));
+        }
+        if (dynamicFilterByCluster)
+        {
+            dynamicHighOut->clear();
+            dynamicLowOut->clear();
+            dynamicHighOut->reserve(rawDynamic->size());
+            dynamicLowOut->reserve(rawDynamic->size());
+        }
+
+        centersOut.header.stamp = timeLaserInfoStamp;
+        centersOut.header.frame_id = odometryFrame;
+
+        dynamicClusteredOut->reserve(rawDynamic->size());
+
+        int clusterId = 0;
+        for (const auto& c : clusters)
+        {
+            if (!c.pts || c.pts->empty())
+                continue;
+
+            if (dynamicFilterByCluster)
+            {
+                for (int idx : c.idx)
+                {
+                    const auto& p = rawDynamic->points[idx];
+                    const float conf = rawConfidence[idx];
+                    if (conf >= dynamicConfidenceThreshold)
+                        dynamicHighOut->push_back(p);
+                    else
+                        dynamicLowOut->push_back(p);
+                }
+            }
+
+            const Eigen::Vector3f& center = c.center;
+
+            // Clustered output uses intensity = clusterId
+            for (int idx : c.idx)
+            {
+                PointType p = rawDynamic->points[idx];
+                p.intensity = static_cast<float>(clusterId);
+                dynamicClusteredOut->push_back(p);
+            }
+
+            if (dynamicPublishCenters)
+            {
+                geometry_msgs::Pose pose;
+                pose.position.x = center.x();
+                pose.position.y = center.y();
+                pose.position.z = center.z();
+                pose.orientation.w = 1.0;
+                centersOut.poses.push_back(pose);
+            }
 
             if (dynamicPublishMarkers)
             {
@@ -368,16 +440,28 @@ public:
                 m.id = clusterId;
                 m.type = visualization_msgs::Marker::CUBE;
                 m.action = visualization_msgs::Marker::ADD;
-                m.pose.position.x = cx;
-                m.pose.position.y = cy;
-                m.pose.position.z = cz;
+                m.pose.position.x = center.x();
+                m.pose.position.y = center.y();
+                m.pose.position.z = center.z();
                 m.pose.orientation.w = 1.0;
+
+                float minX = std::numeric_limits<float>::infinity();
+                float minY = std::numeric_limits<float>::infinity();
+                float minZ = std::numeric_limits<float>::infinity();
+                float maxX = -std::numeric_limits<float>::infinity();
+                float maxY = -std::numeric_limits<float>::infinity();
+                float maxZ = -std::numeric_limits<float>::infinity();
+                for (const auto& p : c.pts->points)
+                {
+                    minX = std::min(minX, p.x); minY = std::min(minY, p.y); minZ = std::min(minZ, p.z);
+                    maxX = std::max(maxX, p.x); maxY = std::max(maxY, p.y); maxZ = std::max(maxZ, p.z);
+                }
                 m.scale.x = std::max(0.05f, maxX - minX);
                 m.scale.y = std::max(0.05f, maxY - minY);
                 m.scale.z = std::max(0.05f, maxZ - minZ);
                 m.color.r = 1.0f;
-                m.color.g = 0.2f;
-                m.color.b = 0.2f;
+                m.color.g = 0.1f;
+                m.color.b = 0.1f;
                 m.color.a = 0.6f;
                 m.lifetime = ros::Duration(mappingProcessInterval * 2.0);
                 clustersMarkersOut.markers.push_back(m);
@@ -386,7 +470,6 @@ public:
             clusterId++;
         }
 
-        // Publish DELETE markers if cluster count shrinks
         if (dynamicPublishMarkers)
         {
             static int lastMarkerCount = 0;
@@ -2055,6 +2138,7 @@ public:
         // publish registered high-res raw cloud
         const bool wantDynamic = dynamicPointEnable && (
             pubDynamicCloud.getNumSubscribers() != 0 ||
+            pubDynamicCloudLow.getNumSubscribers() != 0 ||
             pubDynamicCloudClustered.getNumSubscribers() != 0 ||
             pubDynamicClusters.getNumSubscribers() != 0 ||
             pubDynamicClusterCenters.getNumSubscribers() != 0);
@@ -2073,14 +2157,18 @@ public:
 
             if (wantDynamic)
             {
-                pcl::PointCloud<PointType>::Ptr dynCloud;
+                pcl::PointCloud<PointType>::Ptr dynHigh;
+                pcl::PointCloud<PointType>::Ptr dynLow;
                 pcl::PointCloud<PointType>::Ptr dynClustered;
                 visualization_msgs::MarkerArray markers;
                 geometry_msgs::PoseArray centers;
-                extractDynamicAndClusters(cloudOut, dynCloud, dynClustered, markers, centers);
+                extractDynamicWithConfidence(cloudOut, dynHigh, dynLow, dynClustered, markers, centers);
 
-                if (dynCloud && pubDynamicCloud.getNumSubscribers() != 0)
-                    publishCloud(pubDynamicCloud, dynCloud, timeLaserInfoStamp, odometryFrame);
+                if (dynHigh && pubDynamicCloud.getNumSubscribers() != 0)
+                    publishCloud(pubDynamicCloud, dynHigh, timeLaserInfoStamp, odometryFrame);
+
+                if (dynLow && pubDynamicCloudLow.getNumSubscribers() != 0)
+                    publishCloud(pubDynamicCloudLow, dynLow, timeLaserInfoStamp, odometryFrame);
 
                 if (dynClustered && pubDynamicCloudClustered.getNumSubscribers() != 0)
                     publishCloud(pubDynamicCloudClustered, dynClustered, timeLaserInfoStamp, odometryFrame);

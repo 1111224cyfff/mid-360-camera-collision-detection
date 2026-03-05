@@ -1,6 +1,6 @@
 dynamic_tracker:
   input_topic: /lio_sam/mapping/dynamic_cluster_centers
-  output_frame: ""   # empty = use incoming PoseArray frame_id
+  output_frame: map  # use fixed frame to avoid empty frame_id warnings
 
   # Preference=2 (avoid misses): permissive defaults
   gate_distance_base: 1.5              # [m]

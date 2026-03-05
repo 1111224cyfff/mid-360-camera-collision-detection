@@ -6,6 +6,11 @@ set(CMAKE_CXX_FLAGS "-std=c++14")
 set(CMAKE_CXX_FLAGS_RELEASE "-O3 -Wall -g -pthread")
 # set(PCL_DIR "/home/deploy/livox_lidar/pcl-pcl-1.8.0/build")
 
+# 修复libusb符号查找错误：优先使用系统libusb而不是MVS的旧版本
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH "/usr/lib/aarch64-linux-gnu:${CMAKE_INSTALL_RPATH}")
+
 find_package(catkin REQUIRED COMPONENTS
   tf
   roscpp
@@ -104,4 +109,4 @@ target_link_libraries(${PROJECT_NAME}_imuPreintegration Boost::timer ${catkin_LI
 
 # Dynamic cluster tracker (ID + velocity + prediction markers)
 add_executable(${PROJECT_NAME}_dynamicTracker src/dynamicTracker.cpp)
-target_link_libraries(${PROJECT_NAME}_dynamicTracker ${catkin_LIBRARIES})
+target_link_libraries(${PROJECT_NAME}_dynamicTracker ${catkin_LIBRARIES} ${PCL_LIBRARIES})

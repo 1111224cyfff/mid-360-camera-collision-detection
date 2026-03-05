@@ -1,0 +1,120 @@
+当前动态点识别流程（按数据流）：
+
+输入与坐标
+使用已去畸变并变换到 odometryFrame 的注册点云（mapping 阶段），在 mapOptmization.cpp 中处理。
+局部地图
+由附近关键帧的 corner/surf 子地图拼接并下采样得到局部地图，用于最近邻对比（见 mapOptmization.cpp）。
+动态点判定（残差）
+对每个点计算 nnDist（到局部地图最近邻距离），阈值为
+𝑡
+ℎ
+𝑟
+𝑒
+𝑠
+ℎ
+=
+𝑘
+𝑛
+𝑛
+_
+𝑚
+𝑎
+𝑥
+_
+𝑑
+𝑖
+𝑠
+𝑡
+_
+𝑏
+𝑎
+𝑠
+𝑒
++
+𝑘
+𝑛
+𝑛
+_
+𝑚
+𝑎
+𝑥
+_
+𝑑
+𝑖
+𝑠
+𝑡
+_
+𝑠
+𝑐
+𝑎
+𝑙
+𝑒
+⋅
+𝑟
+𝑎
+𝑛
+𝑔
+𝑒
+thresh=knn_max_dist_base+knn_max_dist_scale⋅range
+同时要求邻域内邻居数满足 min_neighbors。满足条件即认为动态点。
+置信度划分
+置信度：
+𝑐
+𝑜
+𝑛
+𝑓
+=
+𝑛
+𝑛
+𝐷
+𝑖
+𝑠
+𝑡
+−
+𝑡
+ℎ
+𝑟
+𝑒
+𝑠
+ℎ
+𝑐
+𝑜
+𝑛
+𝑓
+𝑖
+𝑑
+𝑒
+𝑛
+𝑐
+𝑒
+_
+𝑠
+𝑐
+𝑎
+𝑙
+𝑒
+conf= 
+confidence_scale
+nnDist−thresh
+​
+  并截断到 
+[
+0
+,
+1
+]
+[0,1]
+conf >= confidence_threshold → 高置信度动态点（红）
+其余为低置信度动态点（灰）
+聚类过滤
+对所有动态点做欧式聚类（cluster_* 参数），可启用 filter_by_cluster 过滤离散噪点。
+输出话题
+高置信度动态点：/lio_sam/mapping/cloud_dynamic
+低置信度动态点：/lio_sam/mapping/cloud_dynamic_low
+聚类点云（intensity=clusterId）：/lio_sam/mapping/cloud_dynamic_clustered
+聚类包围盒：/lio_sam/mapping/dynamic_clusters
+聚类中心：/lio_sam/mapping/dynamic_cluster_centers
+RViz 显示
+Dynamic Cloud 显示 /lio_sam/mapping/cloud_dynamic_clustered
+Dynamic Low Confidence 显示 /lio_sam/mapping/cloud_dynamic_low
+见 rviz.rviz

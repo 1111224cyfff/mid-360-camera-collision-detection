@@ -33,6 +33,3 @@ __pycache__/
 
 # Local large model weights
 src/yolo11_ros/weights/
-
-#
-src/CMakeLists.txt

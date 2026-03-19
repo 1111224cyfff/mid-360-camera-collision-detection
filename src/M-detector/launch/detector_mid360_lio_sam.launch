@@ -1,0 +1,74 @@
+<launch>
+
+
+	<arg name="rviz" default="true" />
+	<arg name="rviz_node_name" default="rviz" />
+	<arg name="time_file" default=""/>	
+	<arg name="out_path" default=""/>	
+	<arg name="out_origin_path" default=""/>
+	<arg name="pose_log" default="false"/>
+	<arg name="pose_log_file" default=""/>
+	<arg name="cluster_out_file" default=""/>
+	<arg name="time_breakdown_file" default=""/>
+	<arg name="odometry_frame" default="odom"/>
+	<arg name="world_frame" default="map"/>
+	<arg name="enable_pointcloud_bridge" default="true"/>
+	<arg name="bridge_input_topic" default="/m_detector/point_out"/>
+	<arg name="bridge_output_topic" default="/m_detector/point_out_map"/>
+	<arg name="bridge_target_frame" default="$(arg world_frame)"/>
+	<arg name="bridge_source_frame_override" default=""/>
+	<arg name="bridge_tf_wait_timeout" default="0.10"/>
+	<arg name="bridge_fallback_to_latest_tf" default="true"/>
+	<arg name="bridge_preserve_input_stamp" default="true"/>
+
+	<!-- Dynamic clustering parameters -->
+	<arg name="enable_dyn_cluster" default="true"/>
+	<arg name="dyn_cluster_input" default="/m_detector/point_out_map"/>
+	<arg name="dyn_cluster_output" default="/m_detector/dynamic_clusters"/>
+	<arg name="dyn_cluster_tolerance" default="0.6"/>
+	<arg name="dyn_cluster_min_size" default="20"/>
+	<arg name="dyn_cluster_max_size" default="50000"/>
+
+	<rosparam command="load" file="$(find m_detector)/config/mid360/mid360.yaml" />
+	<param name="dyn_obj/points_topic" type="string" value="/lio_sam/mapping/cloud_registered" />
+	<param name="dyn_obj/odom_topic" type="string" value="/lio_sam/mapping/odometry" />
+	<param name="dyn_obj/frame_id" type="string" value="$(arg odometry_frame)" />
+	<param name="dyn_obj/input_in_world_frame" type="bool" value="true" />
+	<param name="dyn_obj/out_file" type="string" value="$(arg out_path)" />
+	<param name="dyn_obj/out_file_origin" type="string" value="$(arg out_origin_path)" />
+	<param name="dyn_obj/time_file" type="string" value="$(arg time_file)" />
+	<param name="dyn_obj/pose_log" type="bool" value="$(arg pose_log)" />
+	<param name="dyn_obj/pose_log_file" type="string" value="$(arg pose_log_file)" />
+	<param name="dyn_obj/cluster_out_file" type="string" value="$(arg cluster_out_file)" />
+	<param name="dyn_obj/time_breakdown_file" type="string" value="$(arg time_breakdown_file)" />
+
+	<node pkg="m_detector" type="dynfilter" name="dynfilter" output="screen" />
+	<group if="$(arg enable_pointcloud_bridge)">
+		<node pkg="m_detector" type="pointcloud_tf_bridge" name="m_detector_pointcloud_tf_bridge" output="screen">
+			<param name="input_topic" type="string" value="$(arg bridge_input_topic)" />
+			<param name="output_topic" type="string" value="$(arg bridge_output_topic)" />
+			<param name="target_frame" type="string" value="$(arg bridge_target_frame)" />
+			<param name="source_frame_override" type="string" value="$(arg bridge_source_frame_override)" />
+			<param name="tf_wait_timeout" type="double" value="$(arg bridge_tf_wait_timeout)" />
+			<param name="fallback_to_latest_tf" type="bool" value="$(arg bridge_fallback_to_latest_tf)" />
+			<param name="preserve_input_stamp" type="bool" value="$(arg bridge_preserve_input_stamp)" />
+		</node>
+	</group>
+	<!-- Dynamic clustering node -->
+	<group if="$(arg enable_dyn_cluster)">
+		<node pkg="m_detector" type="dyn_cluster_node" name="dyn_cluster_node" output="screen">
+			<param name="input_topic" type="string" value="$(arg dyn_cluster_input)" />
+			<param name="output_topic" type="string" value="$(arg dyn_cluster_output)" />
+			<param name="output_frame" type="string" value="$(arg world_frame)" />
+			<param name="cluster_tolerance" type="double" value="$(arg dyn_cluster_tolerance)" />
+			<param name="cluster_min_size" type="int" value="$(arg dyn_cluster_min_size)" />
+			<param name="cluster_max_size" type="int" value="$(arg dyn_cluster_max_size)" />
+			<param name="publish_markers" type="bool" value="true" />
+		</node>
+	</group>
+
+	<group if="$(arg rviz)">
+	<node launch-prefix="nice" pkg="rviz" type="rviz" name="$(arg rviz_node_name)" args="-d $(find m_detector)/rviz/demo.rviz" />
+	</group>
+
+</launch>

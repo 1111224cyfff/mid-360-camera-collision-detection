@@ -1,0 +1,19 @@
+# Dynamic point cloud clustering parameters
+# Clusters /m_detector/point_out_map and publishes cluster centers as PoseArray
+
+dyn_cluster_node:
+  # Topics
+  input_topic: /m_detector/point_out_map
+  output_topic: /m_detector/dynamic_clusters
+  marker_topic: /m_detector/dynamic_cluster_markers
+  output_frame: ""  # empty = use input cloud's frame_id
+
+  # Euclidean clustering parameters
+  cluster_tolerance: 0.6    # [m] max distance between points in same cluster
+  cluster_min_size: 20      # minimum points per cluster
+  cluster_max_size: 50000   # maximum points per cluster
+
+  # Visualization
+  publish_markers: true
+  marker_scale: 0.5         # [m] sphere diameter
+  marker_lifetime: 0.2      # [s] marker display duration

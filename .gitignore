@@ -31,5 +31,8 @@ __pycache__/
 # OS
 .DS_Store
 
+# Local large model weights
+src/yolo11_ros/weights/
+
 #
 src/CMakeLists.txt

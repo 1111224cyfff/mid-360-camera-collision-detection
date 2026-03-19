@@ -1,0 +1,54 @@
+# %YAML:1.0
+
+# 该文件用于将点云投影到图像平面。
+# 代码中的计算顺序为：
+#   1) 点云点先按 p_lidar = [x, y, z]^T 组装
+#      若 launch 中 flip_lidar_y_for_projection=true，则实际使用 [x, -y, z]^T
+#   2) 再做外参变换：p_cam = final_rotation_matrix * p_lidar + t_vec
+#   3) 最后做相机投影：uv_h = intrinsic * p_cam
+# 其中 t_vec 的单位为米，intrinsic 的单位为像素。
+
+# 相机内参矩阵 K。
+# 作用：把相机坐标系下的三维点 [Xc, Yc, Zc]^T 投影到图像像素平面。
+# 格式：
+#   [ fx,  0, cx ]
+#   [  0, fy, cy ]
+#   [  0,  0,  1 ]
+# 含义：
+#   fx, fy: 焦距在像素坐标下的尺度
+#   cx, cy: 主点坐标（图像中心偏移）
+intrinsic: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [1755.491486928992, 0.0, 707.106502137028,
+         0.0, 1754.669721077482, 535.521304607669,
+         0.0, 0.0, 1.0]
+
+# 外参中的旋转矩阵 R。
+# 作用：把代码中构造的点云坐标 p_lidar 旋转到相机坐标系。
+# 计算关系：p_cam = R * p_lidar + t_vec
+# 这里填的不是“相机到雷达”矩阵本身，而是根据你提供的 camera->lidar 外参求逆后，
+# 在当前默认配置下直接对应原始点云坐标；如果启用 flip_lidar_y_for_projection，
+# 则需要使用与 [x, -y, z]^T 约定匹配的外参。
+final_rotation_matrix: !!opencv-matrix
+  rows: 3
+  cols: 3
+  dt: d
+  data: [1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         0.0, 0.0, 1.0]
+
+# 外参中的平移向量 t。
+# 作用：在旋转之后，再把点从点云坐标原点平移到相机坐标原点。
+# 计算关系：p_cam = R * p_lidar + t_vec
+# 格式：
+#   [ tx ]
+#   [ ty ]
+#   [ tz ]
+# 这里同样是由你提供的 camera->lidar 外参求逆后得到的 lidar->camera 平移。
+t_vec: !!opencv-matrix
+  rows: 3
+  cols: 1
+  dt: d
+  data: [0.0, 0.0, 0.0]

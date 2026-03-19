@@ -1,0 +1,10 @@
+<launch>
+  <!-- Start hikrobot indoor + RViz -->
+  <include file="$(find hikrobot_camera)/launch/hikrobot_camera_indoor.launch" />
+
+  <!-- Start Livox MID360 using its existing launch defaults -->
+  <arg name="livox_rviz_enable" default="false" />
+  <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360.launch">
+    <arg name="rviz_enable" value="$(arg livox_rviz_enable)" />
+  </include>
+</launch>

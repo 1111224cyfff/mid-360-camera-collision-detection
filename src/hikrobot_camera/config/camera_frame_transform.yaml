@@ -1,0 +1,26 @@
+input_topic: /hikrobot_camera/rgb/compressed
+output_topic: /hikrobot_camera/rgb/leveled/compressed
+source_frame: hikrobot_camera
+parent_frame: body_leveled
+extrinsic_parent_frame: body
+output_frame: hikrobot_camera_leveled
+# livox_camera_lidar_calibration/data/parameters/extrinsic.txt stores lidar->camera.
+extrinsic_direction: lidar_to_camera
+publish_static_tf: true
+extrinsic_matrix:
+  - 0.785983
+  - -0.0208025
+  - -0.617898
+  - -0.0952186
+  - 0.0338731
+  - 0.999382
+  - 0.0094418
+  - 0.117529
+  - 0.61732
+  - -0.0283512
+  - 0.786201
+  - 0.0653585
+  - 0.0
+  - 0.0
+  - 0.0
+  - 1.0

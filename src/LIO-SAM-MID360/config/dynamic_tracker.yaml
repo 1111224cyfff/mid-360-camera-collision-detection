@@ -1,5 +1,5 @@
 dynamic_tracker:
-  input_topic: /lio_sam/mapping/dynamic_cluster_centers
+  input_topic: /m_detector/dynamic_clusters
   output_frame: map  # use fixed frame to avoid empty frame_id warnings
 
   # Preference=2 (avoid misses): permissive defaults

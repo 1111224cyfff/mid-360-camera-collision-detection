@@ -1,0 +1,40 @@
+# true 1 和 false 0 
+width: 3072             #图像宽度
+height: 2048            #图像高度
+Offset_x: 0             #X方向偏置
+Offset_y: 0             #Y方向偏置
+
+FrameRateEnable: true   #使能 
+FrameRate: 20           #帧率
+
+ExposureTime: 20000     #曝光时间
+
+# 白平衡
+BalanceWhiteAuto: 1     # 0:手动 1:一次 2:连续(若设备支持)
+
+GammaEnable: true
+Gamma: 0.7              #伽马因子
+
+GainAuto: 2             #亮度的固定增益
+
+SaturationEnable: false
+Saturation: 128          #饱和度
+
+# 话题发布开关
+publish_rgb: false
+# ===== rosbag-friendly compressed image output =====
+# Enable publishing /hikrobot_camera/rgb/compressed (sensor_msgs/CompressedImage)
+publish_rgb_compressed: true
+
+# Compressor settings (jpeg/png)
+compressed_format: jpeg        # jpeg | png
+compressed_jpeg_quality: 85    # 0-100, higher = better quality & larger bag
+compressed_png_level: 3        # 0-9, higher = smaller & slower
+
+# Optional throttling for rosbag bandwidth (0.0 = no limit)
+compressed_max_fps: 0.0
+
+# Topics (usually no need to change)
+compressed_input_topic: /hikrobot_camera/rgb
+compressed_output_topic: /hikrobot_camera/rgb/compressed
+

@@ -9,6 +9,8 @@
   <arg name="imu_output_topic" default="/merged_imu_leveled" />
   <arg name="cloud_topic" default="/merged_pointcloud" />
   <arg name="output_topic" default="/merged_pointcloud_leveled" />
+  <arg name="source_frame_id" default="body" />
+  <arg name="output_frame_id" default="body_leveled" />
 
   <arg name="livox_custom_topic" default="/merged_livox" />
   <arg name="livox_custom_output_topic" default="/merged_livox_leveled" />
@@ -20,12 +22,15 @@
 
   <!-- If false, leveled topics start only after calibration (recommended) -->
   <arg name="publish_before_calibrated" default="false" />
+  <arg name="publish_level_tf" default="true" />
 
   <node pkg="livox_merge" type="merged_pointcloud_leveler_node" name="merged_pointcloud_leveler" output="screen">
     <param name="imu_topic" value="$(arg imu_topic)" />
     <param name="imu_output_topic" value="$(arg imu_output_topic)" />
     <param name="cloud_topic" value="$(arg cloud_topic)" />
     <param name="output_topic" value="$(arg output_topic)" />
+    <param name="source_frame_id" value="$(arg source_frame_id)" />
+    <param name="output_frame_id" value="$(arg output_frame_id)" />
 
     <param name="livox_custom_topic" value="$(arg livox_custom_topic)" />
     <param name="livox_custom_output_topic" value="$(arg livox_custom_output_topic)" />
@@ -34,5 +39,6 @@
     <param name="min_imu_samples" value="$(arg min_imu_samples)" />
 
     <param name="publish_before_calibrated" value="$(arg publish_before_calibrated)" />
+    <param name="publish_level_tf" value="$(arg publish_level_tf)" />
   </node>
 </launch>

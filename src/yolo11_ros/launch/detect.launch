@@ -1,0 +1,7 @@
+<launch>
+    <param name="topic_img"     type="string" value="/left_camera/image" />
+    <param name="topic_res_img" type="string" value="/detect/image" />
+    <param name="weight_name"   type="string" value="yolo11s.engine" />
+    <param name="topic_res_img_pc_" type="string" value="/detect/topic_res_img_pc_" />
+    <node pkg="yolo11_ros" name="detect" type="detect" output="screen" />
+</launch>

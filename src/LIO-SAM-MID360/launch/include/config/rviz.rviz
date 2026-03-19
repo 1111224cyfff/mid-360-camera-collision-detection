@@ -228,7 +228,7 @@ Visualization Manager:
           Size (Pixels): 3
           Size (m): 0.5
           Style: Flat Squares
-          Topic: /lio_sam/mapping/cloud_dynamic_clustered
+          Topic: /m_detector/clustered_cloud
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true

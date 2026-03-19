@@ -1,8 +1,11 @@
 #include <ros/ros.h>
 
+#include <geometry_msgs/TransformStamped.h>
 #include <sensor_msgs/Imu.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/point_cloud2_iterator.h>
+
+#include <tf2_ros/static_transform_broadcaster.h>
 
 #include <livox_ros_driver2/CustomMsg.h>
 
@@ -71,12 +74,15 @@ public:
 
     pnh.param<std::string>("livox_custom_topic", livox_custom_topic_, std::string("/merged_livox"));
     pnh.param<std::string>("livox_custom_output_topic", livox_custom_output_topic_, std::string("/merged_livox_leveled"));
+    pnh.param<std::string>("source_frame_id", source_frame_id_, std::string("body"));
+    pnh.param<std::string>("output_frame_id", output_frame_id_, std::string("body_leveled"));
 
     pnh.param<double>("calib_duration_sec", calib_duration_sec_, 2.0);
     pnh.param<int>("min_imu_samples", min_imu_samples_, 800);  // 2s @ 400Hz
 
     // For your use-case (one-time calibration), default is to publish nothing before calibration is done.
     pnh.param<bool>("publish_before_calibrated", publish_before_calibrated_, false);
+    pnh.param<bool>("publish_level_tf", publish_level_tf_, true);
 
     // Target "up" direction in the leveled output frame. In ROS REP-103, Z is up.
     target_up_ = Eigen::Vector3d(0.0, 0.0, 1.0);
@@ -94,13 +100,65 @@ public:
     ROS_INFO_STREAM("[merged_pointcloud_leveler] Publishing PointCloud2: " << output_topic_);
     ROS_INFO_STREAM("[merged_pointcloud_leveler] Publishing CustomMsg:   " << livox_custom_output_topic_);
     ROS_INFO_STREAM("[merged_pointcloud_leveler] Publishing IMU:         " << imu_output_topic_);
+    ROS_INFO_STREAM("[merged_pointcloud_leveler] Frame mapping: " << source_frame_id_ << " -> " << output_frame_id_
+                                                                   << ", publish_tf=" << (publish_level_tf_ ? "true" : "false"));
     ROS_INFO_STREAM("[merged_pointcloud_leveler] One-time calibration: duration=" << calib_duration_sec_
                                                                                  << " sec, min_samples=" << min_imu_samples_);
   }
 
 private:
+  void rememberSourceFrame(const std::string& frame_id)
+  {
+    if (!frame_id.empty())
+      source_frame_id_ = frame_id;
+  }
+
+  std::string resolveOutputFrameId(const std::string& fallback_frame_id) const
+  {
+    if (!output_frame_id_.empty())
+      return output_frame_id_;
+    if (!source_frame_id_.empty())
+      return source_frame_id_;
+    return fallback_frame_id;
+  }
+
+  void publishLevelTransformOnce()
+  {
+    if (!publish_level_tf_ || level_tf_published_)
+      return;
+    if (source_frame_id_.empty())
+    {
+      ROS_WARN("[merged_pointcloud_leveler] source_frame_id is empty; skip publishing level TF");
+      return;
+    }
+    if (output_frame_id_.empty() || output_frame_id_ == source_frame_id_)
+    {
+      level_tf_published_ = true;
+      return;
+    }
+
+    geometry_msgs::TransformStamped tf_msg;
+    tf_msg.header.stamp = ros::Time::now();
+    tf_msg.header.frame_id = output_frame_id_;
+    tf_msg.child_frame_id = source_frame_id_;
+    tf_msg.transform.translation.x = 0.0;
+    tf_msg.transform.translation.y = 0.0;
+    tf_msg.transform.translation.z = 0.0;
+    tf_msg.transform.rotation.x = q_level_.x();
+    tf_msg.transform.rotation.y = q_level_.y();
+    tf_msg.transform.rotation.z = q_level_.z();
+    tf_msg.transform.rotation.w = q_level_.w();
+    static_tf_broadcaster_.sendTransform(tf_msg);
+    level_tf_published_ = true;
+
+    ROS_INFO_STREAM("[merged_pointcloud_leveler] Published TF " << tf_msg.header.frame_id << " -> "
+                                                                 << tf_msg.child_frame_id);
+  }
+
   void imuCb(const sensor_msgs::Imu::ConstPtr& msg)
   {
+    rememberSourceFrame(msg->header.frame_id);
+
     // During calibration phase, accumulate accel samples.
     if (!calibrated_)
     {
@@ -131,6 +189,7 @@ private:
         R_level_ = rotationFromTwoVectors(up, target_up_);
         q_level_ = Eigen::Quaterniond(R_level_).normalized();
         calibrated_ = true;
+        publishLevelTransformOnce();
 
         ROS_INFO_STREAM("[merged_pointcloud_leveler] Calibrated using " << imu_samples_ << " IMU samples over " << elapsed
                                                                          << " sec");
@@ -146,7 +205,7 @@ private:
 
     // After calibrated, publish a leveled IMU (vector quantities rotated into the leveled frame).
     sensor_msgs::Imu out = *msg;
-    out.header.frame_id = msg->header.frame_id;  // keep original frame_id unless you want to remap it
+  out.header.frame_id = calibrated_ ? resolveOutputFrameId(msg->header.frame_id) : msg->header.frame_id;
 
     const Eigen::Vector3d acc_in(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
     const Eigen::Vector3d gyr_in(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
@@ -176,6 +235,8 @@ private:
 
   void cloudCb(const sensor_msgs::PointCloud2::ConstPtr& msg)
   {
+    rememberSourceFrame(msg->header.frame_id);
+
     if (!calibrated_)
     {
       ROS_WARN_THROTTLE(2.0, "[merged_pointcloud_leveler] Waiting for IMU calibration; dropping PointCloud2 until calibrated");
@@ -204,6 +265,7 @@ private:
     }
 
     sensor_msgs::PointCloud2 out = *msg;
+  out.header.frame_id = resolveOutputFrameId(msg->header.frame_id);
 
     if (dx == sensor_msgs::PointField::FLOAT32)
     {
@@ -247,6 +309,8 @@ private:
 
   void livoxCustomCb(const livox_ros_driver2::CustomMsg::ConstPtr& msg)
   {
+    rememberSourceFrame(msg->header.frame_id);
+
     if (!calibrated_)
     {
       ROS_WARN_THROTTLE(2.0, "[merged_pointcloud_leveler] Waiting for IMU calibration; dropping CustomMsg until calibrated");
@@ -256,6 +320,7 @@ private:
     }
 
     livox_ros_driver2::CustomMsg out = *msg;
+  out.header.frame_id = resolveOutputFrameId(msg->header.frame_id);
     for (auto& pt : out.points)
     {
       const Eigen::Vector3d p(pt.x, pt.y, pt.z);
@@ -281,12 +346,16 @@ private:
 
   std::string livox_custom_topic_;
   std::string livox_custom_output_topic_;
+  std::string source_frame_id_;
+  std::string output_frame_id_;
 
   double calib_duration_sec_{2.0};
   int min_imu_samples_{800};
   bool publish_before_calibrated_{false};
+  bool publish_level_tf_{true};
 
   bool calibrated_{false};
+  bool level_tf_published_{false};
   ros::Time first_imu_stamp_;
   int imu_samples_{0};
   Eigen::Vector3d acc_sum_{0.0, 0.0, 0.0};
@@ -294,6 +363,7 @@ private:
   Eigen::Vector3d target_up_{0.0, 0.0, 1.0};
   Eigen::Matrix3d R_level_{Eigen::Matrix3d::Identity()};
   Eigen::Quaterniond q_level_{Eigen::Quaterniond::Identity()};
+  tf2_ros::StaticTransformBroadcaster static_tf_broadcaster_;
 };
 
 int main(int argc, char** argv)

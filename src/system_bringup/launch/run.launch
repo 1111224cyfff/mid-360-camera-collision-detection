@@ -3,16 +3,11 @@
   <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" />
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/dynamic_zhangjiang20260122.bag" /> -->
   <arg name="detector_rviz" default="true" />
-  <arg name="base_frame" default="base_link" />
+  <!-- 现有坐标与投影链固定基于 body_leveled。 -->
   <arg name="odometry_frame" default="odom" />
   <arg name="world_frame" default="map" />
-  <arg name="leveled_frame" default="body_leveled" />
   <!-- rosbag 回放建议启用仿真时钟，并让 rosbag 发布 /clock -->
   <param name="/use_sim_time" value="true" />
-
-  <!-- 将水平化后的参考系显式接回主机体系，避免 base_link 与 body_leveled 分裂成两棵树 -->
-  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_leveled_tf"
-      args="0 0 0 0 0 0 $(arg base_frame) $(arg leveled_frame)" />
 
   <!-- 启动 相机tf转换 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch" />
@@ -22,6 +17,10 @@
 
   <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
   <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
+
+    <!-- merged_livox 的原始输出 frame 是 body，这里显式声明 body 与 base_link 重合。 -->
+    <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_body_tf"
+      args="0 0 0 0 0 0 base_link body" />
 
   <!-- 启动 LIO-SAM (6-axis) -->
   <include file="$(find lio_sam)/launch/run6axis.launch" />

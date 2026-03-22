@@ -139,15 +139,16 @@ private:
 
     geometry_msgs::TransformStamped tf_msg;
     tf_msg.header.stamp = ros::Time::now();
-    tf_msg.header.frame_id = output_frame_id_;
-    tf_msg.child_frame_id = source_frame_id_;
+    tf_msg.header.frame_id = source_frame_id_;
+    tf_msg.child_frame_id = output_frame_id_;
     tf_msg.transform.translation.x = 0.0;
     tf_msg.transform.translation.y = 0.0;
     tf_msg.transform.translation.z = 0.0;
-    tf_msg.transform.rotation.x = q_level_.x();
-    tf_msg.transform.rotation.y = q_level_.y();
-    tf_msg.transform.rotation.z = q_level_.z();
-    tf_msg.transform.rotation.w = q_level_.w();
+    const Eigen::Quaterniond q_source_from_output = q_level_.conjugate();
+    tf_msg.transform.rotation.x = q_source_from_output.x();
+    tf_msg.transform.rotation.y = q_source_from_output.y();
+    tf_msg.transform.rotation.z = q_source_from_output.z();
+    tf_msg.transform.rotation.w = q_source_from_output.w();
     static_tf_broadcaster_.sendTransform(tf_msg);
     level_tf_published_ = true;
 

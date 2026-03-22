@@ -3,52 +3,30 @@
   <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" />
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/dynamic_zhangjiang20260122.bag" /> -->
   <arg name="detector_rviz" default="true" />
-  <!-- 现有 RViz 配置和投影链默认基于 body_leveled。仅在明确需要时再切到非水平化分支。 -->
-  <arg name="use_leveling" default="true" />
-
-  <!-- 不做水平化时，直接发布 body -> camera 的静态外参，并给图像一个新的 frame/topic 供投影使用。 -->
-  <group unless="$(arg use_leveling)">
-    <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
-      <arg name="output_topic" value="/hikrobot_camera/rgb/body/compressed" />
-      <arg name="parent_frame" value="body" />
-      <arg name="output_frame" value="hikrobot_camera_body" />
-    </include>
-  </group>
+  <!-- 现有 RViz 配置和投影链固定基于 body_leveled。 -->
 
   <!-- 启动 相机tf转换 -->
-  <group if="$(arg use_leveling)">
-    <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch" />
-  </group>
+  <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch" />
 
   <!-- 启动 Livox merge -->
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
 
   <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
-  <group if="$(arg use_leveling)">
-    <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
-  </group>
+  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
+
+  <!-- 与完整 bringup 保持一致：显式声明 base_link 与 merge 输出 body 重合。 -->
+  <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_body_tf"
+        args="0 0 0 0 0 0 base_link body" />
 
     <!-- 录制水平化后的点云、IMU、相机图像，以及 TF 变换树 -->
     <!-- <node pkg="rosbag" type="record" name="leveled_topics_record"
       args="/merged_livox_leveled /merged_pointcloud_leveled /merged_imu_leveled /hikrobot_camera/rgb/leveled/compressed /tf /tf_static"
       output="screen" /> -->
 
-    <group unless="$(arg use_leveling)">
-      <include file="$(find system_bringup)/launch/run_segment.launch">
-        <arg name="bag_file" value="$(arg bag_file)" />
-        <arg name="raw_image_topic" value="/hikrobot_camera/rgb/body" />
-        <arg name="pointcloud_topic" value="/merged_pointcloud" />
-        <arg name="launch_rviz" value="$(arg detector_rviz)" />
-        <arg name="bag_play_args" value="--clock" />
-      </include>
-    </group>
-
-    <group if="$(arg use_leveling)">
-      <include file="$(find system_bringup)/launch/run_segment.launch">
-        <arg name="bag_file" value="$(arg bag_file)" />
-        <arg name="launch_rviz" value="$(arg detector_rviz)" />
-        <arg name="bag_play_args" value="--clock" />
-      </include>
-    </group>
+    <include file="$(find system_bringup)/launch/run_segment.launch">
+      <arg name="bag_file" value="$(arg bag_file)" />
+      <arg name="launch_rviz" value="$(arg detector_rviz)" />
+      <arg name="bag_play_args" value="--clock" />
+    </include>
 
 </launch>

@@ -12,6 +12,7 @@ lio_sam:
   baselinkFrame: "base_link"
   odometryFrame: "odom"
   mapFrame: "map"
+  publishImuBaselinkTf: false              # avoid duplicate odom->base_link TF; mapOptimization remains the authority
 
   # GPS Settings
   useImuHeadingInitialization: false           # if using GPS data, set to "true"

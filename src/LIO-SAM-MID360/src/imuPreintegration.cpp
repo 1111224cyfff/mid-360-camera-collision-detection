@@ -120,14 +120,16 @@ public:
         laserOdometry.pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(roll, pitch, yaw);
         pubImuOdometry.publish(laserOdometry);
 
-        // publish tf
-        static tf::TransformBroadcaster tfOdom2BaseLink;
-        tf::Transform tCur;
-        tf::poseMsgToTF(laserOdometry.pose.pose, tCur);
-        if(lidarFrame != baselinkFrame)
-            tCur = tCur * lidar2Baselink;
-        tf::StampedTransform odom_2_baselink = tf::StampedTransform(tCur, odomMsg->header.stamp, odometryFrame, baselinkFrame);
-        tfOdom2BaseLink.sendTransform(odom_2_baselink);
+        if (publishImuBaselinkTf)
+        {
+            static tf::TransformBroadcaster tfOdom2BaseLink;
+            tf::Transform tCur;
+            tf::poseMsgToTF(laserOdometry.pose.pose, tCur);
+            if(lidarFrame != baselinkFrame)
+                tCur = tCur * lidar2Baselink;
+            tf::StampedTransform odom_2_baselink = tf::StampedTransform(tCur, odomMsg->header.stamp, odometryFrame, baselinkFrame);
+            tfOdom2BaseLink.sendTransform(odom_2_baselink);
+        }
 
         // publish IMU path
         static nav_msgs::Path imuPath;

@@ -1,16 +1,34 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" />
-  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/dynamic_zhangjiang20260122.bag" /> -->
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia.bag" />
+
   <arg name="detector_rviz" default="true" />
+  <arg name="segment_rviz" default="true" />
+  <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
+  <arg name="camera_frame_transform_delay_sec" default="4" />
+
   <!-- 现有坐标与投影链固定基于 body_leveled。 -->
   <arg name="odometry_frame" default="odom" />
   <arg name="world_frame" default="map" />
-  <!-- rosbag 回放建议启用仿真时钟，并让 rosbag 发布 /clock -->
-  <param name="/use_sim_time" value="true" />
 
-  <!-- 启动 相机tf转换 -->
-  <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch" />
+  <arg name="segment_raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
+  <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
+  <arg name="segment_result_topic" default="/segment/image_raw" />
+  <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
+  <arg name="segment_weight_name" default="yolo11s-seg.engine" />
+  <arg name="segment_projection_config_path" default="$(find yolo11_ros)/config/segment_projection.yaml" />
+  <arg name="segment_flip_lidar_y_for_projection" default="false" />
+  <arg name="segment_use_tf_for_projection" default="true" />
+  <arg name="segment_log_rotated_grid" default="false" />
+  <arg name="segment_sync_max_interval_sec" default="0.03" />
+  <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
+  <arg name="segment_image_transport_in" default="compressed" />
+
+  <!-- 启动相机 tf 转换。body_leveled 由 leveler 在 rosbag 回放开始后约 1s 标定完成后发布。 -->
+  <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
+    <arg name="launch_prefix" value="bash -c 'sleep $(arg camera_frame_transform_delay_sec); exec $0 $@'" />
+  </include>
 
   <!-- 启动 Livox merge -->
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
@@ -18,9 +36,11 @@
   <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
   <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
 
-    <!-- merged_livox 的原始输出 frame 是 body，这里显式声明 body 与 base_link 重合。 -->
-    <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_body_tf"
-      args="0 0 0 0 0 0 base_link body" />
+  <!-- merged_livox 的原始输出 frame 是 body，这里显式声明 body 与 base_link 重合。 -->
+  <node pkg="tf2_ros"
+        type="static_transform_publisher"
+        name="base_to_body_tf"
+        args="0 0 0 0 0 0 base_link body" />
 
   <!-- 启动 LIO-SAM (6-axis) -->
   <include file="$(find lio_sam)/launch/run6axis.launch" />
@@ -38,10 +58,40 @@
     <arg name="output_frame" value="$(arg world_frame)" />
   </include>
 
-  <!-- 固定 rosbag 播放（延时2秒，确保订阅者就绪） -->
-  <node pkg="rosbag" type="play" name="rosbag_play"
-      args="--clock $(arg bag_file)"
-        launch-prefix="bash -c 'sleep 2; exec $0 $@'"
+  <!-- 将 leveled 压缩图像还原为 raw，供分割节点直接订阅。 -->
+  <node pkg="image_transport"
+        type="republish"
+        name="image_republish_leveled"
+        args="$(arg segment_image_transport_in) in:=$(arg segment_raw_image_topic) raw out:=$(arg segment_raw_image_topic)"
         output="screen" />
 
+  <!-- 启动图像-点云分割投影。 -->
+  <include file="$(find yolo11_ros)/launch/segment.launch">
+    <arg name="topic_img" value="$(arg segment_raw_image_topic)" />
+    <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
+    <arg name="topic_res_img" value="$(arg segment_result_topic)" />
+    <arg name="topic_res_img_pc" value="$(arg segment_result_pc_topic)" />
+    <arg name="weight_name" value="$(arg segment_weight_name)" />
+    <arg name="projection_config_path" value="$(arg segment_projection_config_path)" />
+    <arg name="flip_lidar_y_for_projection" value="$(arg segment_flip_lidar_y_for_projection)" />
+    <arg name="use_tf_for_projection" value="$(arg segment_use_tf_for_projection)" />
+    <arg name="log_rotated_grid" value="$(arg segment_log_rotated_grid)" />
+    <arg name="sync_max_interval_sec" value="$(arg segment_sync_max_interval_sec)" />
+    <arg name="tf_lookup_timeout_sec" value="$(arg segment_tf_lookup_timeout_sec)" />
+  </include>
+
+  <node pkg="rviz"
+        type="rviz"
+        name="system_bringup_rviz"
+        args="-d $(arg rviz_config)"
+        if="$(arg segment_rviz)"
+        output="screen" />
+
+  <!-- 固定 rosbag 播放（延时 1 秒，确保订阅者就绪）。整个流程只保留一个播放器。 -->
+  <node pkg="rosbag"
+        type="play"
+        name="rosbag_play"
+        args="$(arg bag_file)"
+        launch-prefix="bash -c 'sleep 1; exec $0 $@'"
+        output="screen" />
 </launch>

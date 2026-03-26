@@ -93,7 +93,7 @@ dyn_obj:
     cluster_extend_pixel: 2
     cluster_min_pixel_number: 1
     cluster_thrustable_thresold: 0.08
-    cluster_Voxel_revolusion: 0.3
+    cluster_Voxel_revolusion: 2
 
 
     dyn_filter_en: true

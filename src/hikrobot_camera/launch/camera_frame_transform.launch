@@ -6,10 +6,12 @@
   <arg name="output_frame" default="hikrobot_camera_leveled" />
   <arg name="extrinsic_direction" default="lidar_to_camera" />
   <arg name="publish_static_tf" default="true" />
+  <arg name="launch_prefix" default="" />
 
   <node pkg="hikrobot_camera"
         type="camera_frame_transform_node"
         name="camera_frame_transform"
+        launch-prefix="$(arg launch_prefix)"
         output="screen">
     <rosparam command="load" file="$(find hikrobot_camera)/config/camera_frame_transform.yaml" />
     <param name="input_topic" value="$(arg input_topic)" />

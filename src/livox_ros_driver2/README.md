@@ -391,8 +391,8 @@ For more infomation about the HAP config, please refer to:
         },
         "host_net_info": [
             {
-                "lidar_ip": ["192.168.2.100"], # Lidar ip
-                "host_ip": "192.168.2.5", # host ip
+                "lidar_ip": ["192.168.1.100"], # Lidar ip
+                "host_ip": "192.168.1.5", # host ip
                 "cmd_data_port": 56101,
                 "push_msg_port": 56201,
                 "point_data_port": 56301,
@@ -403,7 +403,7 @@ For more infomation about the HAP config, please refer to:
     },
     "lidar_configs": [
         {
-            "ip": "192.168.2.100", # ip of the LiDAR you want to config
+            "ip": "192.168.1.100", # ip of the LiDAR you want to config
             "pcl_data_type": 1,
             "pattern_mode": 0,
             "extrinsic_parameter": {

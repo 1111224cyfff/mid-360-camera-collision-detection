@@ -1,0 +1,15 @@
+<launch>
+  <arg name="primary_iface" default="eth0" />
+  <arg name="primary_mode" default="software" />
+  <arg name="sync_system_clock" default="false" />
+  <arg name="clock_sync_direction" default="system-to-phc" />
+  <arg name="log_level" default="info" />
+  <arg name="use_sudo" default="true" />
+
+  <node pkg="system_bringup"
+        type="ptp_time_sync.sh"
+        name="ptp_time_sync"
+        output="screen"
+        required="false"
+      args="--primary-iface $(arg primary_iface) --primary-mode $(arg primary_mode) --sync-system-clock $(arg sync_system_clock) --clock-sync-direction $(arg clock_sync_direction) --log-level $(arg log_level) --use-sudo $(arg use_sudo)" />
+</launch>

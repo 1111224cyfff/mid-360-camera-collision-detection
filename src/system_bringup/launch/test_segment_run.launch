@@ -1,12 +1,17 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" />
-  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/dynamic_zhangjiang20260122.bag" /> -->
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia.bag" />
   <arg name="detector_rviz" default="true" />
+  <arg name="camera_frame_transform_delay_sec" default="3" />
   <!-- 现有 RViz 配置和投影链固定基于 body_leveled。 -->
+  <arg name="odometry_frame" default="odom" />
+  <arg name="world_frame" default="map" />
 
   <!-- 启动 相机tf转换 -->
-  <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch" />
+  <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
+    <arg name="launch_prefix" value="bash -c 'sleep $(arg camera_frame_transform_delay_sec); exec $0 $@'" />
+  </include>
 
   <!-- 启动 Livox merge -->
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
@@ -26,7 +31,6 @@
     <include file="$(find system_bringup)/launch/run_segment.launch">
       <arg name="bag_file" value="$(arg bag_file)" />
       <arg name="launch_rviz" value="$(arg detector_rviz)" />
-      <arg name="bag_play_args" value="--clock" />
     </include>
 
 </launch>

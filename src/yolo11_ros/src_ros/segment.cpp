@@ -328,6 +328,7 @@ private:
     std::string topic_img_, topic_res_img_, weight_name_, topic_pointcloud_, topic_res_img_pc_;
     bool flip_lidar_y_for_projection_ = false;
     bool use_tf_for_projection_ = true;
+    bool log_rotated_grid_ = false;
     double tf_lookup_timeout_sec_ = 0.02;
     double sync_max_interval_sec_ = 0.12;
     bool tf_projection_logged_ = false;
@@ -457,8 +458,8 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
         // 固定关注区域参数（根据实际情况调整）
         float range_min_x = 0.0f, range_max_x = 100.0f;
         float range_min_y = -50.0f, range_max_y = 50.0f;
-        ROS_INFO("Using fixed region for grid: x in [%.2f, %.2f], y in [%.2f, %.2f]",
-                 range_min_x, range_max_x, range_min_y, range_max_y);
+        ROS_INFO_ONCE("Using fixed region for grid: x in [%.2f, %.2f], y in [%.2f, %.2f]",
+                      range_min_x, range_max_x, range_min_y, range_max_y);
 
         // STEP 1: 清理超过 danger_duration 未更新的危险区域
         ros::Time now = ros::Time::now();
@@ -522,17 +523,14 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
         }
 
         // STEP 5: 输出最终 grid 并记录报警单元
-        std::stringstream grid_ss;
         std::vector<std::pair<int,int>> alarmCells;
         for (int r = 0; r < PERSIST_GRID_ROWS; r++) {
             for (int c = 0; c < PERSIST_GRID_COLS; c++) {
-                grid_ss << final_grid[r][c] << " ";
                 // 报警条件：只处理包含“人”和“设备”的组合
                 if (final_grid[r][c] == 3 || final_grid[r][c] == 5 || final_grid[r][c] == 7) {
                     alarmCells.push_back(std::make_pair(r, c));
                 }
             }
-            grid_ss << "\n";
         }
 
         // STEP 6: 创建旋转后的矩阵，尺寸交换行列
@@ -545,15 +543,16 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
             }
         }
 
-        // 旋转后矩阵用于输出显示（替换原来的输出）
-        std::stringstream rotated_grid_ss;
-        for (int r = 0; r < PERSIST_GRID_COLS; ++r) {
-            for (int c = 0; c < PERSIST_GRID_ROWS; ++c) {
-                rotated_grid_ss << rotated_grid[r][c] << " ";
+        if (log_rotated_grid_) {
+            std::stringstream rotated_grid_ss;
+            for (int r = 0; r < PERSIST_GRID_COLS; ++r) {
+                for (int c = 0; c < PERSIST_GRID_ROWS; ++c) {
+                    rotated_grid_ss << rotated_grid[r][c] << " ";
+                }
+                rotated_grid_ss << "\n";
             }
-            rotated_grid_ss << "\n";
+            ROS_INFO_STREAM_THROTTLE(1.0, "Final rotated grid (90 degrees CCW):\n" << rotated_grid_ss.str());
         }
-        ROS_INFO_STREAM("Final rotated grid (90 degrees CCW):\n" << rotated_grid_ss.str());
 
         // STEP 7: 检查报警条件，触发报警和记录日志
         if (!alarmCells.empty()) {
@@ -615,7 +614,7 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
 
     sensor_msgs::ImagePtr msg_img_new = cv_bridge::CvImage(msg->header, "bgr8", img_res_).toImageMsg();
     sensor_msgs::ImagePtr msg_img_new_pc = cv_bridge::CvImage(msg->header, "bgr8", image_to_show).toImageMsg();
-    ROS_INFO("Output Image Size: Width = %d, Height = %d", img_res_.cols, img_res_.rows);
+    ROS_DEBUG_THROTTLE(2.0, "Output Image Size: Width = %d, Height = %d", img_res_.cols, img_res_.rows);
     pub_img_pc_.publish(msg_img_new_pc);
     pub_img_.publish(msg_img_new);
 
@@ -638,6 +637,7 @@ RosNode::RosNode()
     n_.param<std::string>("projection_config_path", projection_config_path_, projection_config_path_);
     n_.param<bool>("flip_lidar_y_for_projection", flip_lidar_y_for_projection_, false);
     n_.param<bool>("use_tf_for_projection", use_tf_for_projection_, true);
+    n_.param<bool>("log_rotated_grid", log_rotated_grid_, false);
     n_.param<double>("tf_lookup_timeout_sec", tf_lookup_timeout_sec_, tf_lookup_timeout_sec_);
     n_.param<double>("sync_max_interval_sec", sync_max_interval_sec_, sync_max_interval_sec_);
     engine_file_path_ = pkg_path_ + "/weights/" + weight_name_;
@@ -657,6 +657,7 @@ RosNode::RosNode()
     std::cout << "\033[1;32m--projection_cfg  : " << projection_config_path_ << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--flip_lidar_y    : " << (flip_lidar_y_for_projection_ ? "true" : "false") << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--use_tf_projection: " << (use_tf_for_projection_ ? "true" : "false") << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--log_rotated_grid: " << (log_rotated_grid_ ? "true" : "false") << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--tf_lookup_timeout: " << tf_lookup_timeout_sec_ << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--sync_max_interval: " << sync_max_interval_sec_ << "\033[0m" << std::endl;
 

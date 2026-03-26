@@ -192,7 +192,7 @@ private:
     std::vector<std::string> imu_topics_cfg; // 保存读取到的IMU话题，便于匹配
 
     // Buffer / publishing policy (from YAML buffers/*)
-    size_t max_imu_buffer_size_ = 200;
+    size_t max_imu_buffer_size_ = 2000;
     double imu_time_epsilon_ = 1e-6;
     // Keep IMU stamps globally non-decreasing across PublishTimeSortedImu() calls.
     // This guards against non-monotonic LiDAR sync windows (e.g. multi-sensor interleaving)
@@ -236,8 +236,8 @@ public:
                 if (sync_frequency <= 0.0)
                     sync_frequency = 20.0;
                 sync_period = 1.0 / sync_frequency;
-                int max_imu_buf = 200;
-                nh_ptr->param("buffers/max_imu_buffer_size", max_imu_buf, 200);
+                int max_imu_buf = 2000;
+                nh_ptr->param("buffers/max_imu_buffer_size", max_imu_buf, 2000);
                 if (max_imu_buf < 50) max_imu_buf = 50;
                 max_imu_buffer_size_ = static_cast<size_t>(max_imu_buf);
                 if (imu_select_index < 0 && !imu_select_topic_contains.empty())
@@ -502,6 +502,7 @@ public:
         printf("Initialized MergeLidar with %d lidars\n", Nlidar);
         printf("Target sync frequency: %.1f Hz\n", sync_frequency);
         printf("Sync period: %.3f ms\n", sync_period * 1000);
+        printf("Max IMU buffer size per sensor: %zu samples\n", max_imu_buffer_size_);
         printf("Publishing merged PointCloud2 to: /merged_pointcloud\n");
         printf("Publishing merged Livox CustomMsg to: /merged_livox\n");
         printf("Publishing height-sliced PointCloud2 to: /merged_pointcloud_sliced\n");
@@ -783,8 +784,9 @@ public:
         if(imu_buf[idx].size() > max_imu_buffer_size_)
         {
             imu_buf[idx].pop_front();
-            if(imu_handler_count % 500 == 0)
-                ROS_WARN("IMU %d buffer overflow, dropping old data", idx);
+            ROS_WARN_THROTTLE(2.0,
+                              "IMU %d buffer overflow, dropping old data (buffer=%zu, limit=%zu)",
+                              idx, imu_buf[idx].size(), max_imu_buffer_size_);
         }
         imu_buf_mtx.unlock();
         

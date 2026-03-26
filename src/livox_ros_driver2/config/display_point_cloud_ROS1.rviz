@@ -75,7 +75,7 @@ Visualization Manager:
       Size (Pixels): 3
       Size (m): 0.009999999776482582
       Style: Flat Squares
-      Topic: /livox/lidar_192_168_2_125
+      Topic: /livox/lidar_192_168_1_125
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true
@@ -103,7 +103,7 @@ Visualization Manager:
       Size (Pixels): 3
       Size (m): 0.009999999776482582
       Style: Flat Squares
-      Topic: /livox/lidar_192_168_2_148
+      Topic: /livox/lidar_192_168_1_148
       Unreliable: false
       Use Fixed Frame: true
       Use rainbow: true

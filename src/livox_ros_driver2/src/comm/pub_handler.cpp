@@ -146,6 +146,39 @@ void PubHandler::OnLivoxLidarPointCloudCallback(uint32_t handle, const uint8_t d
   packet.raw_data.insert(packet.raw_data.end(), data->data, data->data + length);
   {
     std::unique_lock<std::mutex> lock(self->packet_mutex_);
+    uint32_t id = 0;
+    if (GetLidarId(packet.lidar_type, packet.handle, id)) {
+      auto last_it = self->last_raw_packet_timestamp_.find(id);
+      if (last_it != self->last_raw_packet_timestamp_.end() && packet.time_stamp < last_it->second) {
+        uint64_t count = ++self->raw_packet_backward_count_[id];
+        if (count <= 10 || (count % 100) == 0) {
+          printf("[livox_ros_driver2][timestamp_diag] raw packet timestamp reversed: handle=%u id=%u count=%llu prev=%llu curr=%llu delta_ns=%lld time_type=%u data_type=%u dot_num=%u interval_ns=%llu\n",
+                 handle,
+                 id,
+                 static_cast<unsigned long long>(count),
+                 static_cast<unsigned long long>(last_it->second),
+                 static_cast<unsigned long long>(packet.time_stamp),
+                 static_cast<long long>(packet.time_stamp - last_it->second),
+                 static_cast<unsigned int>(data->time_type),
+                 static_cast<unsigned int>(data->data_type),
+                 static_cast<unsigned int>(data->dot_num),
+                 static_cast<unsigned long long>(packet.point_interval));
+        }
+      }
+
+      auto last_type_it = self->last_raw_packet_time_type_.find(id);
+      if (last_type_it != self->last_raw_packet_time_type_.end() && last_type_it->second != data->time_type) {
+        printf("[livox_ros_driver2][timestamp_diag] raw packet time_type changed: handle=%u id=%u prev_type=%u curr_type=%u timestamp_ns=%llu\n",
+               handle,
+               id,
+               static_cast<unsigned int>(last_type_it->second),
+               static_cast<unsigned int>(data->time_type),
+               static_cast<unsigned long long>(packet.time_stamp));
+      }
+
+      self->last_raw_packet_timestamp_[id] = packet.time_stamp;
+      self->last_raw_packet_time_type_[id] = data->time_type;
+    }
     self->raw_packet_queue_.push_back(packet);
   }
     self->packet_condition_.notify_one();
@@ -176,6 +209,21 @@ void PubHandler::CheckTimer(uint32_t id) {
     }
 
     frame_.base_time[frame_.lidar_num] = process_handler->GetLidarBaseTime();
+    auto last_pub_it = last_published_base_time_.find(id);
+    if (last_pub_it != last_published_base_time_.end() && frame_.base_time[frame_.lidar_num] < last_pub_it->second) {
+      uint64_t count = ++published_base_time_backward_count_[id];
+      if (count <= 10 || (count % 100) == 0) {
+        printf("[livox_ros_driver2][timestamp_diag] published base_time reversed: id=%u count=%llu prev=%llu curr=%llu delta_ns=%lld recent_ns=%llu cloud_size=%u\n",
+               id,
+               static_cast<unsigned long long>(count),
+               static_cast<unsigned long long>(last_pub_it->second),
+               static_cast<unsigned long long>(frame_.base_time[frame_.lidar_num]),
+               static_cast<long long>(frame_.base_time[frame_.lidar_num] - last_pub_it->second),
+               static_cast<unsigned long long>(process_handler->GetRecentTimeStamp()),
+               static_cast<unsigned int>(process_handler->GetLidarPointCloudsSize()));
+      }
+    }
+    last_published_base_time_[id] = frame_.base_time[frame_.lidar_num];
     points_[id].clear();
     process_handler->GetLidarPointClouds(points_[id]);
     if (points_[id].empty()) {

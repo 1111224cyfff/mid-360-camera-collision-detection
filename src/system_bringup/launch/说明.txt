@@ -1,0 +1,2 @@
+1.先启动ptp_sync等待成功提示
+2.collect_data开始采集数据

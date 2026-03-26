@@ -13,6 +13,7 @@
   <exec_depend>hikrobot_camera</exec_depend>
   <exec_depend>image_transport</exec_depend>
   <exec_depend>lio_sam</exec_depend>
+  <exec_depend>livox_ros_driver2</exec_depend>
   <exec_depend>livox_merge</exec_depend>
   <exec_depend>m_detector</exec_depend>
   <exec_depend>roslaunch</exec_depend>

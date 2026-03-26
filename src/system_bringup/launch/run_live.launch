@@ -1,0 +1,142 @@
+# 在线检测启动入口
+<launch>
+  <arg name="camera_launch" default="$(find hikrobot_camera)/launch/hikrobot_camera_indoor.launch" />
+  <arg name="enable_camera" default="true" />
+  <arg name="enable_camera_frame_transform" default="true" />
+
+  <arg name="enable_livox_driver" default="true" />
+  <arg name="livox_rviz_enable" default="false" />
+  <arg name="livox_bd_list" default="100000000000000" />
+
+  <arg name="enable_merge" default="true" />
+  <arg name="enable_merge_rviz" default="false" />
+  <arg name="slice_z_min" default="-1.5" />
+  <arg name="slice_z_max" default="2.5" />
+
+  <arg name="enable_leveler" default="true" />
+  <arg name="enable_base_to_body_tf" default="true" />
+
+  <arg name="enable_lio_sam" default="true" />
+  <arg name="enable_m_detector" default="true" />
+  <arg name="detector_rviz" default="true" />
+  <arg name="odometry_frame" default="odom" />
+  <arg name="world_frame" default="map" />
+
+  <arg name="enable_dynamic_tracker" default="true" />
+
+  <arg name="enable_segment" default="false" />
+  <arg name="segment_rviz" default="false" />
+  <arg name="segment_raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
+  <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
+  <arg name="segment_result_topic" default="/segment/image_raw" />
+  <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
+  <arg name="segment_weight_name" default="yolo11s-seg.engine" />
+  <arg name="segment_projection_config_path" default="$(find yolo11_ros)/config/segment_projection.yaml" />
+  <arg name="segment_flip_lidar_y_for_projection" default="false" />
+  <arg name="segment_use_tf_for_projection" default="true" />
+  <arg name="segment_sync_max_interval_sec" default="0.05" />
+  <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
+  <arg name="segment_image_transport_in" default="compressed" />
+
+  <arg name="enable_record" default="false" />
+  <arg name="record_output" default="/home/nvidia/ws_livox/data/live_capture_$(env USER).bag" />
+  <arg name="record_topics" default="/merged_livox_leveled /merged_pointcloud_leveled /merged_imu_leveled /hikrobot_camera/rgb/compressed /hikrobot_camera/rgb/leveled/compressed /tf /tf_static" />
+
+  <group if="$(arg enable_camera)">
+    <include file="$(arg camera_launch)" />
+  </group>
+
+  <group if="$(arg enable_camera_frame_transform)">
+    <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch" />
+  </group>
+
+  <group if="$(arg enable_livox_driver)">
+    <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360.launch">
+      <arg name="rviz_enable" value="$(arg livox_rviz_enable)" />
+      <arg name="bd_list" value="$(arg livox_bd_list)" />
+    </include>
+  </group>
+
+  <group if="$(arg enable_merge)">
+    <node pkg="livox_merge" type="merge_lidar_node" name="livox_merge_node" output="screen">
+      <rosparam file="$(find livox_merge)/config/livox_merge_config.yaml" command="load" />
+      <param name="slice_z_min" value="$(arg slice_z_min)" />
+      <param name="slice_z_max" value="$(arg slice_z_max)" />
+      <remap from="/merged_pointcloud" to="/merged_pointcloud" />
+      <remap from="/merged_pointcloud_sliced" to="/merged_pointcloud_sliced" />
+      <remap from="/merged_livox" to="/merged_livox" />
+      <remap from="/merged_imu" to="/merged_imu" />
+    </node>
+
+    <node if="$(arg enable_merge_rviz)"
+          name="livox_merge_rviz"
+          pkg="rviz"
+          type="rviz"
+          output="screen"
+          args="-d $(find livox_merge)/rviz/livox_merge.rviz" />
+  </group>
+
+  <group if="$(arg enable_leveler)">
+    <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
+  </group>
+
+  <node if="$(arg enable_base_to_body_tf)"
+        pkg="tf2_ros"
+        type="static_transform_publisher"
+        name="base_to_body_tf"
+        args="0 0 0 0 0 0 base_link body" />
+
+  <group if="$(arg enable_lio_sam)">
+    <include file="$(find lio_sam)/launch/run6axis.launch" />
+  </group>
+
+  <group if="$(arg enable_m_detector)">
+    <include file="$(find m_detector)/launch/detector_mid360_lio_sam.launch">
+      <arg name="rviz" value="$(arg detector_rviz)" />
+      <arg name="rviz_node_name" value="m_detector_rviz" />
+      <arg name="odometry_frame" value="$(arg odometry_frame)" />
+      <arg name="world_frame" value="$(arg world_frame)" />
+    </include>
+  </group>
+
+  <group if="$(arg enable_dynamic_tracker)">
+    <include file="$(find lio_sam)/launch/dynamic_tracker.launch">
+      <arg name="output_frame" value="$(arg world_frame)" />
+    </include>
+  </group>
+
+  <group if="$(arg enable_segment)">
+    <node pkg="image_transport"
+          type="republish"
+          name="image_republish_leveled"
+          args="$(arg segment_image_transport_in) in:=$(arg segment_raw_image_topic) raw out:=$(arg segment_raw_image_topic)"
+          output="screen" />
+
+    <include file="$(find yolo11_ros)/launch/segment.launch">
+      <arg name="topic_img" value="$(arg segment_raw_image_topic)" />
+      <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
+      <arg name="topic_res_img" value="$(arg segment_result_topic)" />
+      <arg name="topic_res_img_pc" value="$(arg segment_result_pc_topic)" />
+      <arg name="weight_name" value="$(arg segment_weight_name)" />
+      <arg name="projection_config_path" value="$(arg segment_projection_config_path)" />
+      <arg name="flip_lidar_y_for_projection" value="$(arg segment_flip_lidar_y_for_projection)" />
+      <arg name="use_tf_for_projection" value="$(arg segment_use_tf_for_projection)" />
+      <arg name="sync_max_interval_sec" value="$(arg segment_sync_max_interval_sec)" />
+      <arg name="tf_lookup_timeout_sec" value="$(arg segment_tf_lookup_timeout_sec)" />
+    </include>
+
+    <node if="$(arg segment_rviz)"
+          pkg="rviz"
+          type="rviz"
+          name="system_bringup_segment_rviz"
+          args="-d $(find system_bringup)/rviz/system_bringup.rviz"
+          output="screen" />
+  </group>
+
+  <node if="$(arg enable_record)"
+        pkg="rosbag"
+        type="record"
+        name="live_record"
+        output="screen"
+        args="-O $(arg record_output) $(arg record_topics)" />
+</launch>

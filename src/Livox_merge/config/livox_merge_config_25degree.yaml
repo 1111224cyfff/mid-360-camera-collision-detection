@@ -8,8 +8,8 @@ max_threads: -1         # Maximum threads (-1 for auto-detection)
 lidars:
   count: 2
   topics:
-    - "/livox/lidar_192_168_2_125"
-    - "/livox/lidar_192_168_2_148"
+    - "/livox/lidar_192_168_1_125"
+    - "/livox/lidar_192_168_1_148"
   
   # Extrinsics: 4x4 transformation matrices (row-major order)
   # Each matrix transforms from LiDAR frame to body frame
@@ -30,8 +30,8 @@ lidars:
 imus:
   count: 2
   topics:
-    - "/livox/imu_192_168_2_125"
-    - "/livox/imu_192_168_2_148"
+    - "/livox/imu_192_168_1_125"
+    - "/livox/imu_192_168_1_148"
   
   # Extrinsics: 4x4 transformation matrices (row-major order)
   # Each matrix transforms from IMU frame to body frame
@@ -58,7 +58,7 @@ output:
 # Buffer Management
 buffers:
   max_lidar_buffer_size: 50
-  max_imu_buffer_size: 200
+  max_imu_buffer_size: 2000
   history_retention_time: 0.1  # seconds
 
 # Performance Monitoring

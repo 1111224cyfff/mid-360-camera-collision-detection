@@ -20,3 +20,8 @@ catkin_install_python(PROGRAMS
         DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+install(PROGRAMS
+        scripts/ptp_time_sync.sh
+        DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)
+

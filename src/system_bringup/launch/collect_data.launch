@@ -1,0 +1,43 @@
+<!-- 原始传感器采集入口：只启动 Livox 原始输入、Hikrobot 相机输入与 rosbag 录制。 -->
+<!-- 建议先单独运行 ptp_sync.launch，待终端打印“PTP 已就绪”后，再启动本 launch。 -->
+<launch>
+  <param name="/use_sim_time" value="false" />
+
+  <arg name="enable_camera" default="true" />
+  <arg name="camera_launch" default="$(find hikrobot_camera)/launch/hikrobot_camera_indoor.launch" />
+
+  <arg name="enable_livox_driver" default="true" />
+  <arg name="livox_rviz_enable" default="false" />
+  <arg name="livox_bd_list" default="100000000000000" />
+  <arg name="livox_rosbag_enable" default="false" />
+
+  <arg name="livox_lidar_topic_1" default="/livox/lidar_192_168_1_125" />
+  <arg name="livox_lidar_topic_2" default="/livox/lidar_192_168_1_148" />
+  <arg name="livox_imu_topic_1" default="/livox/imu_192_168_1_125" />
+  <arg name="livox_imu_topic_2" default="/livox/imu_192_168_1_148" />
+  <arg name="camera_image_topic" default="/hikrobot_camera/rgb/compressed" />
+  <arg name="camera_info_topic" default="/hikrobot_camera/camera_info" />
+
+  <arg name="enable_record" default="true" />
+  <arg name="record_output" default="/home/nvidia/ws_livox/data/raw_sensor_capture_$(env USER).bag" />
+  <arg name="record_topics"
+       default="$(arg livox_lidar_topic_1) $(arg livox_lidar_topic_2) $(arg livox_imu_topic_1) $(arg livox_imu_topic_2) $(arg camera_image_topic) $(arg camera_info_topic) /tf /tf_static" />
+
+  <group if="$(arg enable_camera)">
+    <include file="$(arg camera_launch)" />
+  </group>
+
+  <group if="$(arg enable_livox_driver)">
+    <include file="$(find livox_ros_driver2)/launch_ROS1/msg_MID360.launch">
+      <arg name="rviz_enable" value="$(arg livox_rviz_enable)" />
+      <arg name="rosbag_enable" value="$(arg livox_rosbag_enable)" />
+    </include>
+  </group>
+
+  <node if="$(arg enable_record)"
+        pkg="rosbag"
+        type="record"
+        name="sensor_capture_record"
+        output="screen"
+        args="-O $(arg record_output) $(arg record_topics)" />
+</launch>

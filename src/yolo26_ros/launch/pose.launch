@@ -1,0 +1,7 @@
+<launch>
+    <param name="topic_img"     type="string" value="/camera/color/image_raw" />
+    <param name="topic_res_img" type="string" value="/detect/image_raw" />
+    <param name="weight_name"   type="string" value="yolo26s-pose.engine" />
+
+    <node pkg="yolo26_ros" name="pose" type="pose" output="screen" />
+</launch>

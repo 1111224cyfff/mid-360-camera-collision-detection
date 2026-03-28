@@ -1,0 +1,41 @@
+<?xml version="1.0"?>
+<package format="2">
+  <name>yolo26_ros</name>
+  <version>0.1.0</version>
+  <description>ROS wrappers around the vendored YOLO26 TensorRT C++ inference backend.</description>
+
+  <maintainer email="lin@todo.todo">lin</maintainer>
+  <license>AGPL-3.0</license>
+
+  <buildtool_depend>catkin</buildtool_depend>
+
+  <build_depend>cv_bridge</build_depend>
+  <build_depend>message_filters</build_depend>
+  <build_depend>roscpp</build_depend>
+  <build_depend>roslib</build_depend>
+  <build_depend>rospy</build_depend>
+  <build_depend>sensor_msgs</build_depend>
+  <build_depend>tf2</build_depend>
+  <build_depend>tf2_ros</build_depend>
+
+  <build_export_depend>cv_bridge</build_export_depend>
+  <build_export_depend>message_filters</build_export_depend>
+  <build_export_depend>roscpp</build_export_depend>
+  <build_export_depend>roslib</build_export_depend>
+  <build_export_depend>rospy</build_export_depend>
+  <build_export_depend>sensor_msgs</build_export_depend>
+  <build_export_depend>tf2</build_export_depend>
+  <build_export_depend>tf2_ros</build_export_depend>
+
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>message_filters</exec_depend>
+  <exec_depend>roscpp</exec_depend>
+  <exec_depend>roslib</exec_depend>
+  <exec_depend>rospy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>tf2</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+
+  <export>
+  </export>
+</package>

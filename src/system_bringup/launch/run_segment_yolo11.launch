@@ -1,0 +1,43 @@
+<launch>
+    <arg name="bag_file" default="$(find system_bringup)/../../data/2026-03-19.bag" />
+    <!-- image_transport republish uses the base topic and subscribes to <topic>/compressed while publishing raw on <topic>. -->
+    <arg name="raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
+    <arg name="pointcloud_topic" default="/merged_pointcloud_leveled" />
+    <arg name="segment_result_topic" default="/segment/image_raw" />
+    <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
+    <arg name="weight_name" default="yolo11s-seg.engine" />
+    <arg name="segment_launch_file" default="$(find yolo11_ros)/launch/segment.launch" />
+    <arg name="projection_config_path" default="$(find yolo11_ros)/config/segment_projection.yaml" />
+    <arg name="flip_lidar_y_for_projection" default="false" />
+    <arg name="use_tf_for_projection" default="true" />
+    <arg name="log_rotated_grid" default="false" />
+    <!-- 动态场景里，图像与点云配对窗口过大时会造成明显投影漂移。 -->
+    <arg name="sync_max_interval_sec" default="0.03" />
+    <arg name="tf_lookup_timeout_sec" default="0.02" />
+    <arg name="launch_rviz" default="true" />
+    <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
+
+    <param name="use_sim_time" value="false" />
+
+
+    <include file="$(arg segment_launch_file)">
+        <arg name="topic_img" value="$(arg raw_image_topic)" />
+        <arg name="topic_pointcloud" value="$(arg pointcloud_topic)" />
+        <arg name="topic_res_img" value="$(arg segment_result_topic)" />
+        <arg name="topic_res_img_pc" value="$(arg segment_result_pc_topic)" />
+        <arg name="weight_name" value="$(arg weight_name)" />
+        <arg name="projection_config_path" value="$(arg projection_config_path)" />
+        <arg name="flip_lidar_y_for_projection" value="$(arg flip_lidar_y_for_projection)" />
+        <arg name="use_tf_for_projection" value="$(arg use_tf_for_projection)" />
+        <arg name="log_rotated_grid" value="$(arg log_rotated_grid)" />
+        <arg name="sync_max_interval_sec" value="$(arg sync_max_interval_sec)" />
+        <arg name="tf_lookup_timeout_sec" value="$(arg tf_lookup_timeout_sec)" />
+    </include>
+
+    <node pkg="rosbag" type="play" name="rosbag_play" args="$(arg bag_file)" output="screen" />
+
+    <node pkg="image_transport" type="republish" name="image_republish" args="compressed in:=$(arg raw_image_topic) raw out:=$(arg raw_image_topic)" output="screen" />
+
+    <node pkg="rviz" type="rviz" name="system_bringup_rviz" args="-d $(arg rviz_config)" if="$(arg launch_rviz)" output="screen" />
+
+</launch>

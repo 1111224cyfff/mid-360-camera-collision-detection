@@ -1,7 +1,7 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia.bag" />
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia_car_dynamic.bag" />
   <arg name="detector_rviz" default="true" />
   <arg name="camera_frame_transform_delay_sec" default="3" />
   <!-- 现有 RViz 配置和投影链固定基于 body_leveled。 -->
@@ -28,7 +28,7 @@
       args="/merged_livox_leveled /merged_pointcloud_leveled /merged_imu_leveled /hikrobot_camera/rgb/leveled/compressed /tf /tf_static"
       output="screen" /> -->
 
-    <include file="$(find system_bringup)/launch/run_segment.launch">
+    <include file="$(find system_bringup)/launch/run_segment_yolo26.launch">
       <arg name="bag_file" value="$(arg bag_file)" />
       <arg name="launch_rviz" value="$(arg detector_rviz)" />
     </include>

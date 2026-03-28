@@ -17,6 +17,7 @@
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
   <arg name="segment_weight_name" default="yolo11s-seg.engine" />
+  <arg name="segment_launch_file" default="$(find yolo11_ros)/launch/segment.launch" />
   <arg name="segment_projection_config_path" default="$(find yolo11_ros)/config/segment_projection.yaml" />
   <arg name="segment_flip_lidar_y_for_projection" default="false" />
   <arg name="segment_use_tf_for_projection" default="true" />
@@ -66,7 +67,7 @@
         output="screen" />
 
   <!-- 启动图像-点云分割投影。 -->
-  <include file="$(find yolo11_ros)/launch/segment.launch">
+  <include file="$(arg segment_launch_file)">
     <arg name="topic_img" value="$(arg segment_raw_image_topic)" />
     <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
     <arg name="topic_res_img" value="$(arg segment_result_topic)" />

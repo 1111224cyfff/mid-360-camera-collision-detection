@@ -23,6 +23,8 @@
   <arg name="world_frame" default="map" />
 
   <arg name="enable_dynamic_tracker" default="true" />
+  <arg name="enable_warning_evaluator" default="false" />
+  <arg name="enable_warning_controller" default="false" />
 
   <arg name="enable_segment" default="false" />
   <arg name="segment_rviz" default="false" />
@@ -30,9 +32,9 @@
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
-  <arg name="segment_weight_name" default="yolo11s-seg.engine" />
-  <arg name="segment_launch_file" default="$(find yolo11_ros)/launch/segment.launch" />
-  <arg name="segment_projection_config_path" default="$(find yolo11_ros)/config/segment_projection.yaml" />
+  <arg name="segment_weight_name" default="yolo26s-seg.engine" />
+  <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
+  <arg name="segment_projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
   <arg name="segment_flip_lidar_y_for_projection" default="false" />
   <arg name="segment_use_tf_for_projection" default="true" />
   <arg name="segment_sync_max_interval_sec" default="0.05" />
@@ -104,6 +106,16 @@
     <include file="$(find lio_sam)/launch/dynamic_tracker.launch">
       <arg name="output_frame" value="$(arg world_frame)" />
     </include>
+  </group>
+
+  <group if="$(arg enable_warning_evaluator)">
+    <include file="$(find lio_sam)/launch/warning_evaluator.launch">
+      <arg name="output_frame" value="$(arg world_frame)" />
+    </include>
+  </group>
+
+  <group if="$(arg enable_warning_controller)">
+    <include file="$(find lio_sam)/launch/warning_controller.launch" />
   </group>
 
   <group if="$(arg enable_segment)">

@@ -2,6 +2,8 @@
 
 #include <geometry_msgs/PoseArray.h>
 #include <geometry_msgs/PoseStamped.h>
+#include <lio_sam/DynamicTrack.h>
+#include <lio_sam/DynamicTrackArray.h>
 #include <visualization_msgs/MarkerArray.h>
 
 #include <Eigen/Dense>
@@ -165,12 +167,14 @@ public:
 
     pnh_.param<bool>("publish_markers", publish_markers_, true);
     pnh_.param<bool>("publish_tracked_centers", publish_centers_, true);
+    pnh_.param<bool>("publish_track_states", publish_track_states_, true);
 
     sub_centers_ = nh_.subscribe(input_topic_, 5, &DynamicTrackerNode::centersCallback, this);
 
     pub_tracks_markers_ = nh_.advertise<visualization_msgs::MarkerArray>("dynamic_tracker/tracks", 1);
     pub_pred_markers_ = nh_.advertise<visualization_msgs::MarkerArray>("dynamic_tracker/predictions", 1);
     pub_tracked_centers_ = nh_.advertise<geometry_msgs::PoseArray>("dynamic_tracker/tracked_centers", 1);
+    pub_track_states_ = nh_.advertise<lio_sam::DynamicTrackArray>("dynamic_tracker/track_states", 1);
 
     ROS_INFO_STREAM("[dynamic_tracker] input_topic=" << input_topic_);
   }
@@ -296,6 +300,8 @@ private:
       publishMarkers(frame, stamp);
     if (publish_centers_)
       publishCenters(frame, stamp);
+    if (publish_track_states_)
+      publishTrackStates(frame, stamp);
   }
 
   void predictAll(const ros::Time& stamp)
@@ -359,6 +365,37 @@ private:
     }
 
     pub_tracked_centers_.publish(out);
+  }
+
+  void publishTrackStates(const std::string& frame, const ros::Time& stamp)
+  {
+    lio_sam::DynamicTrackArray out;
+    out.header.stamp = stamp;
+    out.header.frame_id = frame;
+
+    out.tracks.reserve(tracks_.size());
+    for (const auto& tr : tracks_)
+    {
+      lio_sam::DynamicTrack msg;
+      msg.track_id = tr.id;
+      msg.state = (tr.state == TrackState::Confirmed)
+        ? lio_sam::DynamicTrack::STATE_CONFIRMED
+        : lio_sam::DynamicTrack::STATE_TENTATIVE;
+      msg.pose.position.x = tr.position().x();
+      msg.pose.position.y = tr.position().y();
+      msg.pose.position.z = tr.z;
+      msg.pose.orientation.w = 1.0;
+      msg.velocity.x = tr.velocity().x();
+      msg.velocity.y = tr.velocity().y();
+      msg.velocity.z = 0.0;
+      msg.speed = static_cast<float>(std::sqrt(tr.velocity().squaredNorm()));
+      msg.age_sec = static_cast<float>((stamp - tr.created).toSec());
+      msg.time_since_update_sec = static_cast<float>((stamp - tr.last_update).toSec());
+      msg.misses = tr.misses;
+      out.tracks.push_back(msg);
+    }
+
+    pub_track_states_.publish(out);
   }
 
   void publishMarkers(const std::string& frame, const ros::Time& stamp)
@@ -491,6 +528,7 @@ private:
   ros::Publisher pub_tracks_markers_;
   ros::Publisher pub_pred_markers_;
   ros::Publisher pub_tracked_centers_;
+  ros::Publisher pub_track_states_;
 
   std::string input_topic_;
   std::string output_frame_;
@@ -513,6 +551,7 @@ private:
 
   bool publish_markers_{true};
   bool publish_centers_{true};
+  bool publish_track_states_{true};
 
   int next_id_{1};
   std::vector<Track> tracks_;

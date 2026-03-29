@@ -1,0 +1,23 @@
+uint8 ACTION_CLEAR=0
+uint8 ACTION_OBSERVE=1
+uint8 ACTION_LIMIT_MOTION=2
+uint8 ACTION_HOLD_POSITION=3
+uint8 ACTION_EMERGENCY_STOP=4
+
+Header header
+uint8 warning_level
+uint8 action
+string action_text
+string source
+string reason
+string monitored_class_name
+int32 monitored_class_id
+int32 dynamic_track_id
+float32 speed_limit_ratio
+bool hold_position
+bool emergency_stop
+bool operator_ack_required
+bool system_ready
+geometry_msgs/Vector3 recommended_direction
+geometry_msgs/Pose monitored_pose
+geometry_msgs/Vector3 monitored_velocity

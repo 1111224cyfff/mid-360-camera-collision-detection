@@ -1,0 +1,7 @@
+<launch>
+  <arg name="config" default="$(find lio_sam)/config/warning_controller.yaml"/>
+
+  <rosparam command="load" file="$(arg config)"/>
+
+  <node pkg="lio_sam" type="lio_sam_warningController" name="warning_controller" output="screen" ns="/" />
+</launch>

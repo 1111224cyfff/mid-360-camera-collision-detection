@@ -14,6 +14,7 @@ find_package(OpenCV 4.5 REQUIRED)
 find_package(PCL REQUIRED)
 find_package(CUDA 11.4 REQUIRED)
 find_package(catkin REQUIRED COMPONENTS
+  lio_sam
   roscpp
   roslib
   rospy
@@ -128,6 +129,7 @@ target_link_libraries(yolo26_pose_node
 cuda_add_executable(yolo26_segment_node src_ros/segment.cpp)
 set_target_properties(yolo26_segment_node PROPERTIES OUTPUT_NAME segment)
 target_compile_definitions(yolo26_segment_node PRIVATE YOLO26_TASK_SEGMENT _CUDA_PREPROCESS _CUDA_POSTPROCESS)
+add_dependencies(yolo26_segment_node ${catkin_EXPORTED_TARGETS})
 target_link_libraries(yolo26_segment_node
   yolo26_tensorrt_backend
   ${catkin_LIBRARIES}

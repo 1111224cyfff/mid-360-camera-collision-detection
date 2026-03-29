@@ -4,6 +4,7 @@
     <arg name="topic_res_img" default="/segment/image_raw" />
     <arg name="topic_res_img_pc" default="/segment/topic_res_img_pc_" />
     <arg name="weight_name" default="yolo26s-seg.engine" />
+    <arg name="topic_object_states" default="/segment/object_states" />
     <arg name="projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
     <arg name="flip_lidar_y_for_projection" default="false" />
     <arg name="use_tf_for_projection" default="true" />
@@ -18,6 +19,7 @@
     <param name="topic_res_img" type="string" value="$(arg topic_res_img)" />
     <param name="topic_res_img_pc_" type="string" value="$(arg topic_res_img_pc)" />
     <param name="weight_name" type="string" value="$(arg weight_name)" />
+    <param name="topic_object_states" type="string" value="$(arg topic_object_states)" />
     <param name="projection_config_path" type="string" value="$(arg projection_config_path)" />
     <param name="flip_lidar_y_for_projection" type="bool" value="$(arg flip_lidar_y_for_projection)" />
     <param name="use_tf_for_projection" type="bool" value="$(arg use_tf_for_projection)" />

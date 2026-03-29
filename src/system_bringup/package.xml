@@ -2,7 +2,7 @@
 <package format="2">
   <name>system_bringup</name>
   <version>0.1.0</version>
-  <description>Top-level launch and utility resources for Livox, YOLO11, and rosbag bringup workflows.</description>
+  <description>Top-level launch and utility resources for Livox, YOLO26, and rosbag bringup workflows.</description>
 
   <maintainer email="maintainer@example.com">Maintainer</maintainer>
   <license>MIT</license>
@@ -21,7 +21,6 @@
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>rviz</exec_depend>
   <exec_depend>yolo26_ros</exec_depend>
-  <exec_depend>yolo11_ros</exec_depend>
 
   <export>
   </export>

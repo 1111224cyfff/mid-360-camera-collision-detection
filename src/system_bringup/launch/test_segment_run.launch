@@ -1,10 +1,15 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia_car_dynamic.bag" />
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia_2.bag" />
   <arg name="detector_rviz" default="true" />
   <arg name="camera_frame_transform_delay_sec" default="3" />
-  <!-- 现有 RViz 配置和投影链固定基于 body_leveled。 -->
+  <arg name="enable_pointcloud_downsample" default="true" />
+  <arg name="pointcloud_leaf_size_m" default="0.2" />
+  <arg name="leveler_calib_duration_sec" default="1.0" />
+  <arg name="leveler_min_imu_samples" default="200" />
+  <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
+  <!-- 该测试入口只验证 body_leveled 侧的传感器/投影链，不启动 LIO-SAM 建图世界系。 -->
   <arg name="odometry_frame" default="odom" />
   <arg name="world_frame" default="map" />
 
@@ -17,7 +22,11 @@
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
 
   <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
-  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
+  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch">
+    <arg name="calib_duration_sec" value="$(arg leveler_calib_duration_sec)" />
+    <arg name="min_imu_samples" value="$(arg leveler_min_imu_samples)" />
+    <arg name="calib_max_gyro_norm_rad_s" value="$(arg leveler_calib_max_gyro_norm_rad_s)" />
+  </include>
 
   <!-- 与完整 bringup 保持一致：显式声明 base_link 与 merge 输出 body 重合。 -->
   <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_body_tf"
@@ -31,6 +40,8 @@
     <include file="$(find system_bringup)/launch/run_segment_yolo26.launch">
       <arg name="bag_file" value="$(arg bag_file)" />
       <arg name="launch_rviz" value="$(arg detector_rviz)" />
+      <arg name="enable_pointcloud_downsample" value="$(arg enable_pointcloud_downsample)" />
+      <arg name="pointcloud_leaf_size_m" value="$(arg pointcloud_leaf_size_m)" />
     </include>
 
 </launch>

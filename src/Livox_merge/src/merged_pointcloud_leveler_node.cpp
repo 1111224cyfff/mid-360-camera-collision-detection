@@ -79,6 +79,9 @@ public:
 
     pnh.param<double>("calib_duration_sec", calib_duration_sec_, 2.0);
     pnh.param<int>("min_imu_samples", min_imu_samples_, 800);  // 2s @ 400Hz
+    pnh.param<double>("calib_max_gyro_norm_rad_s", calib_max_gyro_norm_rad_s_, 0.2);
+    pnh.param<double>("calib_acc_norm_tolerance_ratio", calib_acc_norm_tolerance_ratio_, 0.15);
+    pnh.param<int>("calib_acc_norm_gate_warmup_samples", calib_acc_norm_gate_warmup_samples_, 50);
 
     // For your use-case (one-time calibration), default is to publish nothing before calibration is done.
     pnh.param<bool>("publish_before_calibrated", publish_before_calibrated_, false);
@@ -104,6 +107,9 @@ public:
                                                                    << ", publish_tf=" << (publish_level_tf_ ? "true" : "false"));
     ROS_INFO_STREAM("[merged_pointcloud_leveler] One-time calibration: duration=" << calib_duration_sec_
                                                                                  << " sec, min_samples=" << min_imu_samples_);
+    ROS_INFO_STREAM("[merged_pointcloud_leveler] Static sample gating: max_gyro_norm=" << calib_max_gyro_norm_rad_s_
+            << " rad/s, acc_norm_tolerance_ratio=" << calib_acc_norm_tolerance_ratio_
+            << ", warmup_samples=" << calib_acc_norm_gate_warmup_samples_);
   }
 
 private:
@@ -164,14 +170,60 @@ private:
     if (!calibrated_)
     {
       const Eigen::Vector3d acc(msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
+      const Eigen::Vector3d gyr(msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
       if (!acc.allFinite())
         return;
+
+      const double acc_norm = acc.norm();
+      if (acc_norm < 1e-6)
+        return;
+
+      const double gyr_norm = gyr.allFinite() ? gyr.norm() : 0.0;
+      bool accept_sample = true;
+      if (calib_max_gyro_norm_rad_s_ > 0.0 && gyr_norm > calib_max_gyro_norm_rad_s_)
+      {
+        accept_sample = false;
+        ++rejected_imu_samples_;
+        ROS_WARN_THROTTLE(2.0,
+                          "[merged_pointcloud_leveler] Rejecting calibration IMU sample due to gyro motion: norm=%.4f rad/s > %.4f rad/s",
+                          gyr_norm,
+                          calib_max_gyro_norm_rad_s_);
+      }
+
+      if (accept_sample
+          && calib_acc_norm_tolerance_ratio_ > 0.0
+          && imu_samples_ >= calib_acc_norm_gate_warmup_samples_)
+      {
+        const double mean_acc_norm = acc_norm_sum_ / static_cast<double>(imu_samples_);
+        const double rel_error = std::abs(acc_norm - mean_acc_norm) / std::max(mean_acc_norm, 1e-6);
+        if (rel_error > calib_acc_norm_tolerance_ratio_)
+        {
+          accept_sample = false;
+          ++rejected_imu_samples_;
+          ROS_WARN_THROTTLE(2.0,
+                            "[merged_pointcloud_leveler] Rejecting calibration IMU sample due to accel-norm deviation: norm=%.4f mean=%.4f rel=%.4f > %.4f",
+                            acc_norm,
+                            mean_acc_norm,
+                            rel_error,
+                            calib_acc_norm_tolerance_ratio_);
+        }
+      }
+
+      if (!accept_sample)
+      {
+        if (!calibrated_ && !publish_before_calibrated_)
+          return;
+      }
 
       if (imu_samples_ == 0)
         first_imu_stamp_ = msg->header.stamp;
 
-      acc_sum_ += acc;
-      ++imu_samples_;
+      if (accept_sample)
+      {
+        acc_sum_ += acc;
+        acc_norm_sum_ += acc_norm;
+        ++imu_samples_;
+      }
 
       const double elapsed = (msg->header.stamp - first_imu_stamp_).toSec();
       if (imu_samples_ >= min_imu_samples_ && elapsed >= calib_duration_sec_)
@@ -193,7 +245,7 @@ private:
         publishLevelTransformOnce();
 
         ROS_INFO_STREAM("[merged_pointcloud_leveler] Calibrated using " << imu_samples_ << " IMU samples over " << elapsed
-                                                                         << " sec");
+                                                                         << " sec, rejected_samples=" << rejected_imu_samples_);
         ROS_INFO_STREAM("[merged_pointcloud_leveler] avg_accel=" << avg.transpose() << ", up=" << up.transpose());
         ROS_INFO_STREAM("[merged_pointcloud_leveler] R_level=\n" << R_level_);
         ROS_INFO_STREAM("[merged_pointcloud_leveler] q_level (x y z w)= " << q_level_.x() << " " << q_level_.y() << " "
@@ -352,6 +404,9 @@ private:
 
   double calib_duration_sec_{2.0};
   int min_imu_samples_{800};
+  double calib_max_gyro_norm_rad_s_{0.2};
+  double calib_acc_norm_tolerance_ratio_{0.15};
+  int calib_acc_norm_gate_warmup_samples_{50};
   bool publish_before_calibrated_{false};
   bool publish_level_tf_{true};
 
@@ -359,7 +414,9 @@ private:
   bool level_tf_published_{false};
   ros::Time first_imu_stamp_;
   int imu_samples_{0};
+  int rejected_imu_samples_{0};
   Eigen::Vector3d acc_sum_{0.0, 0.0, 0.0};
+  double acc_norm_sum_{0.0};
 
   Eigen::Vector3d target_up_{0.0, 0.0, 1.0};
   Eigen::Matrix3d R_level_{Eigen::Matrix3d::Identity()};

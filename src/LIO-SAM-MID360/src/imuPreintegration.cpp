@@ -37,12 +37,16 @@ public:
 
     tf::TransformListener tfListener;
     tf::StampedTransform lidar2Baselink;
+    tf::Transform trackingToLidar;
+    bool trackingToLidarReady = false;
 
     double lidarOdomTime = -1;
     deque<nav_msgs::Odometry> imuOdomQueue;
 
     TransformFusion()
     {
+        trackingToLidar.setIdentity();
+
         if(lidarFrame != baselinkFrame)
         {
             try
@@ -54,6 +58,11 @@ public:
             {
                 ROS_ERROR("%s",ex.what());
             }
+        }
+
+        if (trackingFrame == lidarFrame)
+        {
+            trackingToLidarReady = true;
         }
 
         subLaserOdometry = nh.subscribe<nav_msgs::Odometry>("lio_sam/mapping/odometry", 5, &TransformFusion::lidarOdometryHandler, this, ros::TransportHints().tcpNoDelay());
@@ -73,6 +82,72 @@ public:
         tf::quaternionMsgToTF(odom.pose.pose.orientation, orientation);
         tf::Matrix3x3(orientation).getRPY(roll, pitch, yaw);
         return pcl::getTransformation(x, y, z, roll, pitch, yaw);
+    }
+
+    tf::Transform odom2tf(const nav_msgs::Odometry& odom) const
+    {
+        tf::Quaternion orientation;
+        tf::quaternionMsgToTF(odom.pose.pose.orientation, orientation);
+        return tf::Transform(
+            orientation,
+            tf::Vector3(
+                odom.pose.pose.position.x,
+                odom.pose.pose.position.y,
+                odom.pose.pose.position.z));
+    }
+
+    Eigen::Affine3f tf2affine(const tf::Transform& transform) const
+    {
+        double roll, pitch, yaw;
+        tf::Matrix3x3(transform.getRotation()).getRPY(roll, pitch, yaw);
+        return pcl::getTransformation(
+            transform.getOrigin().x(),
+            transform.getOrigin().y(),
+            transform.getOrigin().z(),
+            roll,
+            pitch,
+            yaw);
+    }
+
+    bool updateTrackingToLidarTransform()
+    {
+        if (trackingFrame == lidarFrame)
+        {
+            trackingToLidar.setIdentity();
+            trackingToLidarReady = true;
+            return true;
+        }
+
+        if (trackingToLidarReady)
+            return true;
+
+        try
+        {
+            tfListener.waitForTransform(trackingFrame, lidarFrame, ros::Time(0), ros::Duration(0.05));
+            tf::StampedTransform tf_tracking_to_lidar;
+            tfListener.lookupTransform(trackingFrame, lidarFrame, ros::Time(0), tf_tracking_to_lidar);
+            trackingToLidar = tf_tracking_to_lidar;
+            trackingToLidarReady = true;
+            return true;
+        }
+        catch (tf::TransformException& ex)
+        {
+            ROS_WARN_THROTTLE(
+                2.0,
+                "[TransformFusion] Failed to lookup transform %s -> %s: %s",
+                trackingFrame.c_str(),
+                lidarFrame.c_str(),
+                ex.what());
+            return false;
+        }
+    }
+
+    Eigen::Affine3f trackingOdomToLidarAffine(const nav_msgs::Odometry& odom)
+    {
+        tf::Transform tracking_pose = odom2tf(odom);
+        if (updateTrackingToLidarTransform())
+            tracking_pose = tracking_pose * trackingToLidar;
+        return tf2affine(tracking_pose);
     }
 
     void lidarOdometryHandler(const nav_msgs::Odometry::ConstPtr& odomMsg)
@@ -105,8 +180,12 @@ public:
             else
                 break;
         }
-        Eigen::Affine3f imuOdomAffineFront = odom2affine(imuOdomQueue.front());
-        Eigen::Affine3f imuOdomAffineBack = odom2affine(imuOdomQueue.back());
+
+        if (!updateTrackingToLidarTransform() && trackingFrame != lidarFrame)
+            return;
+
+        Eigen::Affine3f imuOdomAffineFront = trackingOdomToLidarAffine(imuOdomQueue.front());
+        Eigen::Affine3f imuOdomAffineBack = trackingOdomToLidarAffine(imuOdomQueue.back());
         Eigen::Affine3f imuOdomAffineIncre = imuOdomAffineFront.inverse() * imuOdomAffineBack;
         Eigen::Affine3f imuOdomAffineLast = lidarOdomAffine * imuOdomAffineIncre;
         float x, y, z, roll, pitch, yaw;
@@ -114,6 +193,7 @@ public:
         
         // publish latest odometry
         nav_msgs::Odometry laserOdometry = imuOdomQueue.back();
+        laserOdometry.child_frame_id = lidarFrame;
         laserOdometry.pose.pose.position.x = x;
         laserOdometry.pose.pose.position.y = y;
         laserOdometry.pose.pose.position.z = z;
@@ -484,7 +564,7 @@ public:
         nav_msgs::Odometry odometry;
         odometry.header.stamp = thisImu.header.stamp;
         odometry.header.frame_id = odometryFrame;
-        odometry.child_frame_id = lidarFrame;
+        odometry.child_frame_id = trackingFrame;
 
         // transform imu pose to ldiar
         gtsam::Pose3 imuPose = gtsam::Pose3(currentState.quaternion(), currentState.position());

@@ -122,6 +122,11 @@ add_executable(${PROJECT_NAME}_dynamicTracker src/dynamicTracker.cpp)
 add_dependencies(${PROJECT_NAME}_dynamicTracker ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
 target_link_libraries(${PROJECT_NAME}_dynamicTracker ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
+# Cylindrical monitored-object source (robot-following synthetic target)
+add_executable(${PROJECT_NAME}_cylinderObjectSource src/cylinderObjectSource.cpp)
+add_dependencies(${PROJECT_NAME}_cylinderObjectSource ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_cylinderObjectSource ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
 # Early warning evaluator (static clearance + dynamic trend fusion)
 add_executable(${PROJECT_NAME}_warningEvaluator src/warningEvaluator.cpp)
 add_dependencies(${PROJECT_NAME}_warningEvaluator ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)

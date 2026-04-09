@@ -4,7 +4,7 @@
   <param name="/use_sim_time" value="false" />
 
   <arg name="enable_camera" default="true" />
-  <arg name="camera_launch" default="$(find hikrobot_camera)/launch/hikrobot_camera_indoor.launch" />
+  <arg name="camera_launch" default="$(find hikrobot_camera)/launch/hikrobot_camera_outdoor.launch" />
 
   <arg name="enable_livox_driver" default="true" />
   <arg name="livox_rviz_enable" default="false" />

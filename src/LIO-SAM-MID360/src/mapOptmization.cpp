@@ -164,6 +164,11 @@ public:
 
     nav_msgs::Path globalPath;
 
+    tf::TransformListener tfListener;
+    tf::Transform trackingToLidar;
+    bool trackingToLidarReady = false;
+    std::string activeTrackingFrame;
+
     Eigen::Affine3f transPointAssociateToMap;
     Eigen::Affine3f incrementalOdometryAffineFront;
     Eigen::Affine3f incrementalOdometryAffineBack;
@@ -209,6 +214,81 @@ public:
         downSizeFilterSurroundingKeyPoses.setLeafSize(surroundingKeyframeDensity, surroundingKeyframeDensity, surroundingKeyframeDensity); // for surrounding key poses of scan-to-map optimization
 
         allocateMemory();
+
+        trackingToLidar.setIdentity();
+        activeTrackingFrame = trackingFrame;
+        trackingToLidarReady = (activeTrackingFrame == lidarFrame);
+    }
+
+    std::string resolveTrackingFrame(const std::string& frame_id) const
+    {
+        if (!frame_id.empty())
+            return frame_id;
+        return trackingFrame;
+    }
+
+    std::string currentTrackingFrame() const
+    {
+        if (!activeTrackingFrame.empty())
+            return activeTrackingFrame;
+        return trackingFrame;
+    }
+
+    bool updateTrackingToLidarTransform(const std::string& frame_id)
+    {
+        const std::string requestedTrackingFrame = resolveTrackingFrame(frame_id);
+        if (requestedTrackingFrame.empty() || requestedTrackingFrame == lidarFrame)
+        {
+            trackingToLidar.setIdentity();
+            trackingToLidarReady = true;
+            activeTrackingFrame = lidarFrame;
+            return true;
+        }
+
+        if (trackingToLidarReady && requestedTrackingFrame == activeTrackingFrame)
+            return true;
+
+        try
+        {
+            tfListener.waitForTransform(requestedTrackingFrame, lidarFrame, ros::Time(0), ros::Duration(0.05));
+            tf::StampedTransform tf_tracking_to_lidar;
+            tfListener.lookupTransform(requestedTrackingFrame, lidarFrame, ros::Time(0), tf_tracking_to_lidar);
+            trackingToLidar = tf_tracking_to_lidar;
+            trackingToLidarReady = true;
+            activeTrackingFrame = requestedTrackingFrame;
+            return true;
+        }
+        catch (tf::TransformException& ex)
+        {
+            ROS_WARN_THROTTLE(
+                2.0,
+                "[mapOptimization] Failed to lookup transform %s -> %s: %s",
+                requestedTrackingFrame.c_str(),
+                lidarFrame.c_str(),
+                ex.what());
+            trackingToLidarReady = false;
+            activeTrackingFrame = requestedTrackingFrame;
+            return false;
+        }
+    }
+
+    tf::Transform makeTrackingPoseTransform(double roll, double pitch, double yaw, double x, double y, double z) const
+    {
+        return tf::Transform(tf::createQuaternionFromRPY(roll, pitch, yaw), tf::Vector3(x, y, z));
+    }
+
+    tf::Transform trackingPoseToLidarPose(const tf::Transform& tracking_pose) const
+    {
+        if (!trackingToLidarReady)
+            return tracking_pose;
+        return tracking_pose * trackingToLidar;
+    }
+
+    geometry_msgs::Pose transformToPoseMsg(const tf::Transform& transform) const
+    {
+        geometry_msgs::Pose pose;
+        tf::poseTFToMsg(transform, pose);
+        return pose;
     }
 
     pcl::PointCloud<PointType>::Ptr buildLocalMapCloud() const
@@ -543,6 +623,11 @@ public:
         cloudInfo = *msgIn;
         pcl::fromROSMsg(msgIn->cloud_corner,  *laserCloudCornerLast);
         pcl::fromROSMsg(msgIn->cloud_surface, *laserCloudSurfLast);
+
+        const std::string incomingTrackingFrame = msgIn->cloud_deskewed.header.frame_id.empty()
+            ? msgIn->header.frame_id
+            : msgIn->cloud_deskewed.header.frame_id;
+        updateTrackingToLidarTransform(incomingTrackingFrame);
 
         std::lock_guard<std::mutex> lock(mtx);
 
@@ -2035,35 +2120,48 @@ public:
         geometry_msgs::PoseStamped pose_stamped;
         pose_stamped.header.stamp = ros::Time().fromSec(pose_in.time);
         pose_stamped.header.frame_id = odometryFrame;
-        pose_stamped.pose.position.x = pose_in.x;
-        pose_stamped.pose.position.y = pose_in.y;
-        pose_stamped.pose.position.z = pose_in.z;
-        tf::Quaternion q = tf::createQuaternionFromRPY(pose_in.roll, pose_in.pitch, pose_in.yaw);
-        pose_stamped.pose.orientation.x = q.x();
-        pose_stamped.pose.orientation.y = q.y();
-        pose_stamped.pose.orientation.z = q.z();
-        pose_stamped.pose.orientation.w = q.w();
+        const tf::Transform lidar_pose = trackingPoseToLidarPose(
+            makeTrackingPoseTransform(pose_in.roll, pose_in.pitch, pose_in.yaw, pose_in.x, pose_in.y, pose_in.z));
+        pose_stamped.pose = transformToPoseMsg(lidar_pose);
 
         globalPath.poses.push_back(pose_stamped);
     }
 
     void publishOdometry()
     {
+        const std::string tracking_frame = cloudInfo.cloud_deskewed.header.frame_id.empty()
+            ? currentTrackingFrame()
+            : resolveTrackingFrame(cloudInfo.cloud_deskewed.header.frame_id);
+        updateTrackingToLidarTransform(tracking_frame);
+
+        nav_msgs::Odometry laserOdometryTrackingROS;
+        laserOdometryTrackingROS.header.stamp = timeLaserInfoStamp;
+        laserOdometryTrackingROS.header.frame_id = odometryFrame;
+        laserOdometryTrackingROS.child_frame_id = tracking_frame;
+        laserOdometryTrackingROS.pose.pose.position.x = transformTobeMapped[3];
+        laserOdometryTrackingROS.pose.pose.position.y = transformTobeMapped[4];
+        laserOdometryTrackingROS.pose.pose.position.z = transformTobeMapped[5];
+        laserOdometryTrackingROS.pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(
+            transformTobeMapped[0],
+            transformTobeMapped[1],
+            transformTobeMapped[2]);
+
         // Publish odometry for ROS (global)
-        nav_msgs::Odometry laserOdometryROS;
-        laserOdometryROS.header.stamp = timeLaserInfoStamp;
-        laserOdometryROS.header.frame_id = odometryFrame;
+        nav_msgs::Odometry laserOdometryROS = laserOdometryTrackingROS;
         laserOdometryROS.child_frame_id = lidarFrame;
-        laserOdometryROS.pose.pose.position.x = transformTobeMapped[3];
-        laserOdometryROS.pose.pose.position.y = transformTobeMapped[4];
-        laserOdometryROS.pose.pose.position.z = transformTobeMapped[5];
-        laserOdometryROS.pose.pose.orientation = tf::createQuaternionMsgFromRollPitchYaw(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]);
+        const tf::Transform t_odom_to_tracking = makeTrackingPoseTransform(
+            transformTobeMapped[0],
+            transformTobeMapped[1],
+            transformTobeMapped[2],
+            transformTobeMapped[3],
+            transformTobeMapped[4],
+            transformTobeMapped[5]);
+        const tf::Transform t_odom_to_lidar = trackingPoseToLidarPose(t_odom_to_tracking);
+        laserOdometryROS.pose.pose = transformToPoseMsg(t_odom_to_lidar);
         pubLaserOdometryGlobal.publish(laserOdometryROS);
         
         // Publish TF
         static tf::TransformBroadcaster br;
-        tf::Transform t_odom_to_lidar = tf::Transform(tf::createQuaternionFromRPY(transformTobeMapped[0], transformTobeMapped[1], transformTobeMapped[2]),
-                                                      tf::Vector3(transformTobeMapped[3], transformTobeMapped[4], transformTobeMapped[5]));
         tf::StampedTransform trans_odom_to_lidar = tf::StampedTransform(t_odom_to_lidar, timeLaserInfoStamp, odometryFrame, lidarFrame);
         br.sendTransform(trans_odom_to_lidar);
 
@@ -2074,7 +2172,7 @@ public:
         if (lastIncreOdomPubFlag == false)
         {
             lastIncreOdomPubFlag = true;
-            laserOdomIncremental = laserOdometryROS;
+            laserOdomIncremental = laserOdometryTrackingROS;
             increOdomAffine = trans2Affine3f(transformTobeMapped);
         } else {
             Eigen::Affine3f affineIncre = incrementalOdometryAffineFront.inverse() * incrementalOdometryAffineBack;
@@ -2105,7 +2203,7 @@ public:
             }
             laserOdomIncremental.header.stamp = timeLaserInfoStamp;
             laserOdomIncremental.header.frame_id = odometryFrame;
-            laserOdomIncremental.child_frame_id = lidarFrame;
+            laserOdomIncremental.child_frame_id = tracking_frame;
             laserOdomIncremental.pose.pose.position.x = x;
             laserOdomIncremental.pose.pose.position.y = y;
             laserOdomIncremental.pose.pose.position.z = z;

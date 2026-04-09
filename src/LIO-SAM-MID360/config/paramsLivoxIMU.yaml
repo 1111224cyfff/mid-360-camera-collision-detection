@@ -10,9 +10,10 @@ lio_sam:
   # Frames
   lidarFrame: "base_link"
   baselinkFrame: "base_link"
+  trackingFrame: "body_leveled"             # internal LOAM tracking frame after one-time leveling
   odometryFrame: "odom"
   mapFrame: "map"
-  publishImuBaselinkTf: false              # avoid duplicate odom->base_link TF; mapOptimization remains the authority
+  publishImuBaselinkTf: false              # avoid duplicate world->base_link TF; mapOptimization remains the authority
 
   # GPS Settings
   useImuHeadingInitialization: false           # if using GPS data, set to "true"

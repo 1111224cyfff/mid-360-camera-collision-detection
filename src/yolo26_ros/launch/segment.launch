@@ -11,7 +11,7 @@
     <arg name="log_rotated_grid" default="false" />
     <arg name="tf_lookup_timeout_sec" default="0.02" />
     <arg name="sync_max_interval_sec" default="0.12" />
-    <arg name="enable_pointcloud_downsample" default="true" />
+    <arg name="enable_pointcloud_downsample" default="false" />
     <arg name="pointcloud_leaf_size_m" default="0.03" />
 
     <param name="topic_img" type="string" value="$(arg topic_img)" />

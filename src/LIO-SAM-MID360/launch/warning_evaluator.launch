@@ -1,10 +1,12 @@
 <launch>
   <arg name="config" default="$(find lio_sam)/config/warning_evaluator.yaml"/>
   <arg name="output_frame" default="map"/>
+  <arg name="monitored_source_mode" default="visual"/>
 
   <rosparam command="load" file="$(arg config)"/>
 
   <node pkg="lio_sam" type="lio_sam_warningEvaluator" name="warning_evaluator" output="screen" ns="/">
     <param name="output_frame" value="$(arg output_frame)"/>
+    <param name="monitored_source_mode" value="$(arg monitored_source_mode)"/>
   </node>
 </launch>

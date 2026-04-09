@@ -1,0 +1,7 @@
+<launch>
+  <arg name="config" default="$(find lio_sam)/config/cylinder_object_source.yaml"/>
+
+  <rosparam command="load" file="$(arg config)"/>
+
+  <node pkg="lio_sam" type="lio_sam_cylinderObjectSource" name="cylinder_object_source" output="screen" ns="/" />
+</launch>

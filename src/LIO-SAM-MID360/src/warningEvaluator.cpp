@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cctype>
 #include <limits>
 #include <sstream>
 #include <string>
@@ -45,10 +46,42 @@ struct DynamicRiskMetrics
   geometry_msgs::Point track_position;
 };
 
-double vectorNorm(const geometry_msgs::Vector3& value)
+struct ObjectMotionState
 {
-  return std::sqrt(value.x * value.x + value.y * value.y + value.z * value.z);
-}
+  bool has_previous{false};
+  geometry_msgs::Point last_position;
+  ros::Time last_stamp;
+  geometry_msgs::Vector3 velocity;
+};
+
+enum class MonitoredSourceMode
+{
+  Visual,
+  Cylinder,
+  Both
+};
+
+enum class ObjectSourceKind
+{
+  Visual,
+  Cylinder
+};
+
+struct SourceEvaluation
+{
+  bool valid{false};
+  ObjectSourceKind source_kind{ObjectSourceKind::Visual};
+  std::string reason;
+  std::string risk_source{"clear"};
+  lio_sam::SegmentedObjectState selected_object;
+  geometry_msgs::Pose monitored_pose_output;
+  geometry_msgs::Vector3 monitored_velocity;
+  double static_clearance{std::numeric_limits<double>::infinity()};
+  DynamicRiskMetrics dynamic_risk;
+  uint8_t static_level{lio_sam::WarningState::LEVEL_NONE};
+  uint8_t dynamic_level{lio_sam::WarningState::LEVEL_NONE};
+  uint8_t desired_level{lio_sam::WarningState::LEVEL_NONE};
+};
 
 double clampValue(double value, double low, double high)
 {
@@ -102,6 +135,86 @@ double quietNaN()
   return std::numeric_limits<double>::quiet_NaN();
 }
 
+geometry_msgs::Vector3 zeroVector()
+{
+  geometry_msgs::Vector3 value;
+  value.x = 0.0;
+  value.y = 0.0;
+  value.z = 0.0;
+  return value;
+}
+
+std::string toLowerCopy(std::string value)
+{
+  std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) {
+    return static_cast<char>(std::tolower(ch));
+  });
+  return value;
+}
+
+std::string sourceKindToText(ObjectSourceKind source_kind)
+{
+  return source_kind == ObjectSourceKind::Cylinder ? "cylinder" : "visual";
+}
+
+std::string prefixReason(ObjectSourceKind source_kind, const std::string& reason)
+{
+  return sourceKindToText(source_kind) + "/" + reason;
+}
+
+double pointToVerticalCylinderDistance(
+  const Eigen::Vector3d& point,
+  const Eigen::Vector3d& top_center,
+  double radius,
+  double height)
+{
+  const double bounded_radius = std::max(0.0, radius);
+  const double bounded_height = std::max(1e-3, height);
+  const double dx = point.x() - top_center.x();
+  const double dy = point.y() - top_center.y();
+  const double radial_distance = std::sqrt(dx * dx + dy * dy);
+  const double radial_outside = std::max(0.0, radial_distance - bounded_radius);
+
+  const double top_z = top_center.z();
+  const double bottom_z = top_z - bounded_height;
+  const double vertical_above = std::max(0.0, point.z() - top_z);
+  const double vertical_below = std::max(0.0, bottom_z - point.z());
+  const double vertical_outside = vertical_above > 0.0 ? vertical_above : vertical_below;
+
+  if (vertical_outside > 0.0) {
+    return std::sqrt(radial_outside * radial_outside + vertical_outside * vertical_outside);
+  }
+  return radial_outside;
+}
+
+double pointToVerticalCylinderDistance(
+  const pcl::PointXYZI& point,
+  const Eigen::Vector3d& top_center,
+  double radius,
+  double height)
+{
+  return pointToVerticalCylinderDistance(
+    Eigen::Vector3d(point.x, point.y, point.z),
+    top_center,
+    radius,
+    height);
+}
+
+double bestClearanceMetric(const SourceEvaluation& evaluation)
+{
+  double best = std::numeric_limits<double>::infinity();
+  if (std::isfinite(evaluation.static_clearance)) {
+    best = std::min(best, evaluation.static_clearance);
+  }
+  if (std::isfinite(evaluation.dynamic_risk.predicted_clearance)) {
+    best = std::min(best, evaluation.dynamic_risk.predicted_clearance);
+  }
+  if (std::isfinite(evaluation.dynamic_risk.current_clearance)) {
+    best = std::min(best, evaluation.dynamic_risk.current_clearance);
+  }
+  return best;
+}
+
 }  // namespace
 
 class WarningEvaluatorNode
@@ -112,12 +225,16 @@ public:
   , tf_listener_(tf_buffer_)
   , static_cloud_(new pcl::PointCloud<pcl::PointXYZI>())
   {
-    pnh_.param<std::string>("segment_objects_topic", segment_objects_topic_, std::string("/segment/object_states"));
+    pnh_.param<std::string>("visual_objects_topic", visual_objects_topic_, std::string("/segment/object_states"));
+    pnh_.param<std::string>("segment_objects_topic", visual_objects_topic_, visual_objects_topic_);
+    pnh_.param<std::string>("cylinder_objects_topic", cylinder_objects_topic_, std::string("/warning/cylinder_object_states"));
     pnh_.param<std::string>("dynamic_tracks_topic", dynamic_tracks_topic_, std::string("/dynamic_tracker/track_states"));
     pnh_.param<std::string>("static_cloud_topic", static_cloud_topic_, std::string("/lio_sam/mapping/map_local"));
     pnh_.param<std::string>("warning_topic", warning_topic_, std::string("/warning/state"));
     pnh_.param<std::string>("marker_topic", marker_topic_, std::string("/warning/markers"));
     pnh_.param<std::string>("output_frame", output_frame_, std::string("map"));
+    pnh_.param<std::string>("monitored_source_mode", monitored_source_mode_raw_, std::string("visual"));
+    pnh_.param<std::string>("cylinder_class_name", cylinder_class_name_, std::string("synthetic_cylinder"));
 
     pnh_.param<double>("object_stale_timeout", object_stale_timeout_sec_, 0.5);
     pnh_.param<double>("track_stale_timeout", track_stale_timeout_sec_, 1.0);
@@ -128,6 +245,7 @@ public:
     pnh_.param<bool>("allow_tentative_tracks", allow_tentative_tracks_, false);
     pnh_.param<double>("assumed_dynamic_track_radius", assumed_dynamic_track_radius_, 0.4);
     pnh_.param<double>("prediction_horizon", prediction_horizon_sec_, 2.0);
+    pnh_.param<double>("dynamic_prediction_sample_dt", dynamic_prediction_sample_dt_, 0.1);
     pnh_.param<double>("min_closing_speed", min_closing_speed_, 0.05);
     pnh_.param<double>("head_on_closing_speed", head_on_closing_speed_, 0.4);
     pnh_.param<double>("head_on_cosine_threshold", head_on_cosine_threshold_, -0.2);
@@ -148,22 +266,51 @@ public:
     pnh_.param<double>("warning_ttc", warning_ttc_sec_, 2.0);
     pnh_.param<double>("emergency_ttc", emergency_ttc_sec_, 1.0);
 
+    pnh_.param<double>("default_cylinder_radius", default_cylinder_radius_, 2.0);
+    pnh_.param<double>("default_cylinder_height", default_cylinder_height_, 3.0);
+    pnh_.param<double>("cylinder_ground_contact_tolerance", cylinder_ground_contact_tolerance_, 0.15);
+
+    monitored_source_mode_ = parseMonitoredSourceMode(monitored_source_mode_raw_);
     loadMonitoredClassNames();
 
-    sub_objects_ = nh_.subscribe(segment_objects_topic_, 3, &WarningEvaluatorNode::objectsCallback, this);
+    if (!visual_objects_topic_.empty()) {
+      sub_visual_objects_ = nh_.subscribe(visual_objects_topic_, 3, &WarningEvaluatorNode::visualObjectsCallback, this);
+    }
+    if (!cylinder_objects_topic_.empty()) {
+      sub_cylinder_objects_ = nh_.subscribe(cylinder_objects_topic_, 3, &WarningEvaluatorNode::cylinderObjectsCallback, this);
+    }
     sub_tracks_ = nh_.subscribe(dynamic_tracks_topic_, 3, &WarningEvaluatorNode::tracksCallback, this);
     sub_static_cloud_ = nh_.subscribe(static_cloud_topic_, 1, &WarningEvaluatorNode::staticCloudCallback, this);
 
     pub_warning_ = nh_.advertise<lio_sam::WarningState>(warning_topic_, 1, true);
     pub_markers_ = nh_.advertise<visualization_msgs::MarkerArray>(marker_topic_, 1);
 
-    ROS_INFO_STREAM("[warning_evaluator] objects_topic=" << segment_objects_topic_
+    ROS_INFO_STREAM("[warning_evaluator] mode=" << monitored_source_mode_raw_
+                    << " visual_objects_topic=" << visual_objects_topic_
+                    << " cylinder_objects_topic=" << cylinder_objects_topic_
                     << " tracks_topic=" << dynamic_tracks_topic_
                     << " static_cloud_topic=" << static_cloud_topic_
                     << " output_frame=" << output_frame_);
   }
 
 private:
+  MonitoredSourceMode parseMonitoredSourceMode(const std::string& raw_mode) const
+  {
+    const std::string normalized = toLowerCopy(raw_mode);
+    if (normalized == "visual") {
+      return MonitoredSourceMode::Visual;
+    }
+    if (normalized == "cylinder") {
+      return MonitoredSourceMode::Cylinder;
+    }
+    if (normalized == "both") {
+      return MonitoredSourceMode::Both;
+    }
+
+    ROS_WARN("[warning_evaluator] Unknown monitored_source_mode '%s'; falling back to visual.", raw_mode.c_str());
+    return MonitoredSourceMode::Visual;
+  }
+
   void loadMonitoredClassNames()
   {
     XmlRpc::XmlRpcValue class_names_param;
@@ -184,10 +331,17 @@ private:
     }
   }
 
-  void objectsCallback(const lio_sam::SegmentedObjectStateArrayConstPtr& msg)
+  void visualObjectsCallback(const lio_sam::SegmentedObjectStateArrayConstPtr& msg)
   {
-    latest_objects_ = *msg;
-    has_objects_ = true;
+    latest_visual_objects_ = *msg;
+    has_visual_objects_ = true;
+    evaluateAndPublish(resolveStamp(msg->header.stamp));
+  }
+
+  void cylinderObjectsCallback(const lio_sam::SegmentedObjectStateArrayConstPtr& msg)
+  {
+    latest_cylinder_objects_ = *msg;
+    has_cylinder_objects_ = true;
     evaluateAndPublish(resolveStamp(msg->header.stamp));
   }
 
@@ -231,108 +385,224 @@ private:
     out.head_on = false;
     out.system_ready = false;
     out.monitored_pose.orientation.w = 1.0;
+    out.monitored_velocity = zeroVector();
 
-    bool should_publish_markers = publish_markers_;
-    geometry_msgs::Pose monitored_pose_output;
-    monitored_pose_output.orientation.w = 1.0;
-    geometry_msgs::Vector3 monitored_velocity;
-    monitored_velocity.x = 0.0;
-    monitored_velocity.y = 0.0;
-    monitored_velocity.z = 0.0;
+    geometry_msgs::Pose default_pose;
+    default_pose.orientation.w = 1.0;
+    DynamicRiskMetrics empty_dynamic_risk;
 
-    const bool object_ready = has_objects_ && !isArrayStale(latest_objects_.header.stamp, object_stale_timeout_sec_, evaluation_stamp);
-    const bool track_ready = has_tracks_ && !isArrayStale(latest_tracks_.header.stamp, track_stale_timeout_sec_, evaluation_stamp);
+    const bool visual_ready = shouldEvaluateSource(ObjectSourceKind::Visual)
+      && has_visual_objects_
+      && !isArrayStale(latest_visual_objects_.header.stamp, object_stale_timeout_sec_, evaluation_stamp);
+    const bool cylinder_ready = shouldEvaluateSource(ObjectSourceKind::Cylinder)
+      && has_cylinder_objects_
+      && !isArrayStale(latest_cylinder_objects_.header.stamp, object_stale_timeout_sec_, evaluation_stamp);
+    const bool track_ready = has_tracks_
+      && !isArrayStale(latest_tracks_.header.stamp, track_stale_timeout_sec_, evaluation_stamp);
     const bool static_ready = has_static_cloud_
       && !isArrayStale(latest_static_cloud_msg_.header.stamp, static_cloud_stale_timeout_sec_, evaluation_stamp)
       && static_cloud_
       && !static_cloud_->empty();
 
-    if (!object_ready) {
-      publishWarningState(out, should_publish_markers, monitored_pose_output, monitored_velocity, DynamicRiskMetrics{});
+    std::vector<SourceEvaluation> evaluations;
+    bool any_source_ready = false;
+
+    if (visual_ready) {
+      any_source_ready = true;
+      evaluations.push_back(evaluateSource(
+        ObjectSourceKind::Visual,
+        latest_visual_objects_,
+        evaluation_stamp,
+        static_ready,
+        track_ready));
+    }
+    if (cylinder_ready) {
+      any_source_ready = true;
+      evaluations.push_back(evaluateSource(
+        ObjectSourceKind::Cylinder,
+        latest_cylinder_objects_,
+        evaluation_stamp,
+        static_ready,
+        track_ready));
+    }
+
+    if (!any_source_ready) {
+      publishWarningState(out, publish_markers_, default_pose, zeroVector(), empty_dynamic_risk);
       resetLevelState();
       return;
     }
 
-    lio_sam::SegmentedObjectState selected_object;
-    if (!selectMonitoredObject(&selected_object)) {
-      out.reason = "no_monitored_object";
-      publishWarningState(out, should_publish_markers, monitored_pose_output, monitored_velocity, DynamicRiskMetrics{});
+    const SourceEvaluation* best_evaluation = nullptr;
+    for (const auto& evaluation : evaluations) {
+      if (!evaluation.valid) {
+        continue;
+      }
+      if (!best_evaluation || isHigherRisk(evaluation, *best_evaluation)) {
+        best_evaluation = &evaluation;
+      }
+    }
+
+    if (!best_evaluation) {
+      for (const auto& evaluation : evaluations) {
+        if (!evaluation.reason.empty()) {
+          out.reason = evaluation.reason;
+          break;
+        }
+      }
+      if (out.reason.empty()) {
+        out.reason = "no_monitored_object";
+      }
+      publishWarningState(out, publish_markers_, default_pose, zeroVector(), empty_dynamic_risk);
       resetLevelState();
       return;
     }
 
-    const std::string object_frame = latest_objects_.header.frame_id;
-    if (!transformPose(selected_object.pose, object_frame, output_frame_, resolveStamp(latest_objects_.header.stamp), &monitored_pose_output)) {
-      out.reason = "object_tf_failed";
-      publishWarningState(out, should_publish_markers, monitored_pose_output, monitored_velocity, DynamicRiskMetrics{});
-      resetLevelState();
-      return;
+    out.monitored_pose = best_evaluation->monitored_pose_output;
+    out.monitored_velocity = best_evaluation->monitored_velocity;
+    out.monitored_class_id = best_evaluation->selected_object.class_id;
+    out.monitored_class_name = best_evaluation->selected_object.class_name;
+    out.desired_level = best_evaluation->desired_level;
+    out.source = best_evaluation->risk_source;
+    out.reason = best_evaluation->reason;
+
+    if (std::isfinite(best_evaluation->static_clearance)) {
+      out.static_clearance = static_cast<float>(best_evaluation->static_clearance);
     }
-
-    monitored_velocity = estimateObjectVelocity(monitored_pose_output.position, resolveStamp(latest_objects_.header.stamp));
-    out.monitored_pose = monitored_pose_output;
-    out.monitored_velocity = monitored_velocity;
-    out.monitored_class_id = selected_object.class_id;
-    out.monitored_class_name = selected_object.class_name;
-
-    double static_clearance = std::numeric_limits<double>::infinity();
-    if (static_ready) {
-      static_clearance = computeStaticClearance(monitored_pose_output, selected_object.bounding_radius, evaluation_stamp);
-      if (std::isfinite(static_clearance)) {
-        out.static_clearance = static_clearance;
-      }
+    if (std::isfinite(best_evaluation->dynamic_risk.current_clearance)) {
+      out.dynamic_clearance = static_cast<float>(best_evaluation->dynamic_risk.current_clearance);
     }
-
-    DynamicRiskMetrics dynamic_risk;
-    if (track_ready) {
-      dynamic_risk = evaluateDynamicRisk(monitored_pose_output, monitored_velocity, selected_object.bounding_radius);
-      if (std::isfinite(dynamic_risk.current_clearance)) {
-        out.dynamic_clearance = dynamic_risk.current_clearance;
-      }
-      if (std::isfinite(dynamic_risk.relative_speed)) {
-        out.relative_speed = dynamic_risk.relative_speed;
-      }
-      if (std::isfinite(dynamic_risk.ttc)) {
-        out.ttc = dynamic_risk.ttc;
-      }
-      if (std::isfinite(dynamic_risk.predicted_clearance)) {
-        out.predicted_clearance = dynamic_risk.predicted_clearance;
-      }
-      out.dynamic_track_id = dynamic_risk.track_id;
-      out.head_on = dynamic_risk.head_on;
+    if (std::isfinite(best_evaluation->dynamic_risk.relative_speed)) {
+      out.relative_speed = static_cast<float>(best_evaluation->dynamic_risk.relative_speed);
     }
-
-    const uint8_t static_level = classifyStaticLevel(static_clearance);
-    const uint8_t dynamic_level = track_ready ? dynamic_risk.level : lio_sam::WarningState::LEVEL_NONE;
-    const uint8_t desired_level = std::max(static_level, dynamic_level);
-
-    out.desired_level = desired_level;
-    out.source = classifySource(static_level, dynamic_level);
-    out.reason = buildReason(static_level, dynamic_level, static_clearance, dynamic_risk);
+    if (std::isfinite(best_evaluation->dynamic_risk.ttc)) {
+      out.ttc = static_cast<float>(best_evaluation->dynamic_risk.ttc);
+    }
+    if (std::isfinite(best_evaluation->dynamic_risk.predicted_clearance)) {
+      out.predicted_clearance = static_cast<float>(best_evaluation->dynamic_risk.predicted_clearance);
+    }
+    out.dynamic_track_id = best_evaluation->dynamic_risk.track_id;
+    out.head_on = best_evaluation->dynamic_risk.head_on;
     out.system_ready = static_ready || track_ready;
 
     if (!out.system_ready) {
-      out.reason = "missing_static_and_dynamic_context";
-      publishWarningState(out, should_publish_markers, monitored_pose_output, monitored_velocity, dynamic_risk);
+      out.reason = prefixReason(best_evaluation->source_kind, "missing_static_and_dynamic_context");
+      publishWarningState(out, publish_markers_, out.monitored_pose, out.monitored_velocity, best_evaluation->dynamic_risk);
       resetLevelState();
       return;
     }
 
-    const uint8_t active_level = applyLevelHysteresis(desired_level, evaluation_stamp);
-    out.active_level = active_level;
-    out.level_text = levelToText(active_level);
-
-    publishWarningState(out, should_publish_markers, monitored_pose_output, monitored_velocity, dynamic_risk);
+    out.active_level = applyLevelHysteresis(out.desired_level, evaluation_stamp);
+    out.level_text = levelToText(out.active_level);
+    publishWarningState(out, publish_markers_, out.monitored_pose, out.monitored_velocity, best_evaluation->dynamic_risk);
   }
 
-  bool selectMonitoredObject(lio_sam::SegmentedObjectState* selected_object) const
+  bool shouldEvaluateSource(ObjectSourceKind source_kind) const
+  {
+    switch (monitored_source_mode_) {
+      case MonitoredSourceMode::Visual:
+        return source_kind == ObjectSourceKind::Visual;
+      case MonitoredSourceMode::Cylinder:
+        return source_kind == ObjectSourceKind::Cylinder;
+      case MonitoredSourceMode::Both:
+        return true;
+      default:
+        return source_kind == ObjectSourceKind::Visual;
+    }
+  }
+
+  SourceEvaluation evaluateSource(
+    ObjectSourceKind source_kind,
+    const lio_sam::SegmentedObjectStateArray& objects_msg,
+    const ros::Time& evaluation_stamp,
+    bool static_ready,
+    bool track_ready)
+  {
+    SourceEvaluation evaluation;
+    evaluation.source_kind = source_kind;
+    evaluation.reason = prefixReason(source_kind, "no_monitored_object");
+    evaluation.monitored_pose_output.orientation.w = 1.0;
+    evaluation.monitored_velocity = zeroVector();
+
+    bool selected = false;
+    if (source_kind == ObjectSourceKind::Visual) {
+      selected = selectVisualObject(objects_msg, &evaluation.selected_object);
+    } else {
+      selected = selectCylinderObject(objects_msg, &evaluation.selected_object);
+    }
+    if (!selected) {
+      return evaluation;
+    }
+
+    if (!transformPose(
+          evaluation.selected_object.pose,
+          objects_msg.header.frame_id,
+          output_frame_,
+          resolveStamp(objects_msg.header.stamp),
+          &evaluation.monitored_pose_output)) {
+      evaluation.reason = prefixReason(source_kind, "object_tf_failed");
+      return evaluation;
+    }
+
+    evaluation.monitored_velocity = estimateObjectVelocity(
+      source_kind,
+      evaluation.monitored_pose_output.position,
+      resolveStamp(objects_msg.header.stamp));
+
+    if (static_ready) {
+      if (source_kind == ObjectSourceKind::Cylinder) {
+        evaluation.static_clearance = computeCylinderStaticClearance(
+          evaluation.monitored_pose_output,
+          cylinderRadius(evaluation.selected_object),
+          cylinderHeight(evaluation.selected_object),
+          evaluation_stamp);
+      } else {
+        evaluation.static_clearance = computeStaticClearance(
+          evaluation.monitored_pose_output,
+          evaluation.selected_object.bounding_radius,
+          evaluation_stamp);
+      }
+    }
+
+    if (track_ready) {
+      if (source_kind == ObjectSourceKind::Cylinder) {
+        evaluation.dynamic_risk = evaluateCylinderDynamicRisk(
+          evaluation.monitored_pose_output,
+          evaluation.monitored_velocity,
+          cylinderRadius(evaluation.selected_object),
+          cylinderHeight(evaluation.selected_object));
+      } else {
+        evaluation.dynamic_risk = evaluateSphereDynamicRisk(
+          evaluation.monitored_pose_output,
+          evaluation.monitored_velocity,
+          evaluation.selected_object.bounding_radius);
+      }
+    }
+
+    evaluation.static_level = classifyStaticLevel(evaluation.static_clearance);
+    evaluation.dynamic_level = track_ready ? evaluation.dynamic_risk.level : lio_sam::WarningState::LEVEL_NONE;
+    evaluation.desired_level = std::max(evaluation.static_level, evaluation.dynamic_level);
+    evaluation.risk_source = classifySource(evaluation.static_level, evaluation.dynamic_level);
+    evaluation.reason = prefixReason(
+      source_kind,
+      buildReason(
+        evaluation.static_level,
+        evaluation.dynamic_level,
+        evaluation.static_clearance,
+        evaluation.dynamic_risk));
+    evaluation.valid = true;
+    return evaluation;
+  }
+
+  bool selectVisualObject(
+    const lio_sam::SegmentedObjectStateArray& objects_msg,
+    lio_sam::SegmentedObjectState* selected_object) const
   {
     if (!selected_object) {
       return false;
     }
 
     const lio_sam::SegmentedObjectState* best = nullptr;
-    for (const auto& object : latest_objects_.objects) {
+    for (const auto& object : objects_msg.objects) {
       if (object.confidence < min_object_confidence_) {
         continue;
       }
@@ -364,6 +634,37 @@ private:
       }
     }
 
+    if (!best) {
+      return false;
+    }
+
+    *selected_object = *best;
+    return true;
+  }
+
+  bool selectCylinderObject(
+    const lio_sam::SegmentedObjectStateArray& objects_msg,
+    lio_sam::SegmentedObjectState* selected_object) const
+  {
+    if (!selected_object) {
+      return false;
+    }
+
+    const lio_sam::SegmentedObjectState* best = nullptr;
+    for (const auto& object : objects_msg.objects) {
+      if (!cylinder_class_name_.empty() && object.class_name != cylinder_class_name_) {
+        continue;
+      }
+      if (!best
+          || object.confidence > best->confidence
+          || (std::fabs(object.confidence - best->confidence) <= 1e-3f && object.point_count > best->point_count)) {
+        best = &object;
+      }
+    }
+
+    if (!best && !objects_msg.objects.empty()) {
+      best = &objects_msg.objects.front();
+    }
     if (!best) {
       return false;
     }
@@ -420,28 +721,38 @@ private:
     }
   }
 
-  geometry_msgs::Vector3 estimateObjectVelocity(const geometry_msgs::Point& current_position, const ros::Time& stamp)
+  geometry_msgs::Vector3 estimateObjectVelocity(
+    ObjectSourceKind source_kind,
+    const geometry_msgs::Point& current_position,
+    const ros::Time& stamp)
   {
-    geometry_msgs::Vector3 velocity = object_velocity_;
-    if (has_previous_object_ && !last_object_stamp_.isZero()) {
-      const double dt = (stamp - last_object_stamp_).toSec();
+    ObjectMotionState& motion_state = motionStateForSource(source_kind);
+    geometry_msgs::Vector3 velocity = motion_state.velocity;
+
+    if (motion_state.has_previous && !motion_state.last_stamp.isZero()) {
+      const double dt = (stamp - motion_state.last_stamp).toSec();
       if (dt > 1e-3 && dt <= max_object_velocity_dt_sec_) {
         geometry_msgs::Vector3 raw_velocity;
-        raw_velocity.x = (current_position.x - last_object_position_.x) / dt;
-        raw_velocity.y = (current_position.y - last_object_position_.y) / dt;
-        raw_velocity.z = (current_position.z - last_object_position_.z) / dt;
+        raw_velocity.x = (current_position.x - motion_state.last_position.x) / dt;
+        raw_velocity.y = (current_position.y - motion_state.last_position.y) / dt;
+        raw_velocity.z = (current_position.z - motion_state.last_position.z) / dt;
 
-        velocity.x = object_velocity_alpha_ * object_velocity_.x + (1.0 - object_velocity_alpha_) * raw_velocity.x;
-        velocity.y = object_velocity_alpha_ * object_velocity_.y + (1.0 - object_velocity_alpha_) * raw_velocity.y;
-        velocity.z = object_velocity_alpha_ * object_velocity_.z + (1.0 - object_velocity_alpha_) * raw_velocity.z;
+        velocity.x = object_velocity_alpha_ * motion_state.velocity.x + (1.0 - object_velocity_alpha_) * raw_velocity.x;
+        velocity.y = object_velocity_alpha_ * motion_state.velocity.y + (1.0 - object_velocity_alpha_) * raw_velocity.y;
+        velocity.z = object_velocity_alpha_ * motion_state.velocity.z + (1.0 - object_velocity_alpha_) * raw_velocity.z;
       }
     }
 
-    last_object_position_ = current_position;
-    last_object_stamp_ = stamp;
-    object_velocity_ = velocity;
-    has_previous_object_ = true;
+    motion_state.last_position = current_position;
+    motion_state.last_stamp = stamp;
+    motion_state.velocity = velocity;
+    motion_state.has_previous = true;
     return velocity;
+  }
+
+  ObjectMotionState& motionStateForSource(ObjectSourceKind source_kind)
+  {
+    return source_kind == ObjectSourceKind::Cylinder ? cylinder_motion_state_ : visual_motion_state_;
   }
 
   double computeStaticClearance(
@@ -473,7 +784,57 @@ private:
     return std::max(0.0, std::sqrt(nearest_distance_sq.front()) - object_radius);
   }
 
-  DynamicRiskMetrics evaluateDynamicRisk(
+  double computeCylinderStaticClearance(
+    const geometry_msgs::Pose& monitored_pose_output,
+    double cylinder_radius,
+    double cylinder_height,
+    const ros::Time& evaluation_stamp)
+  {
+    if (!static_cloud_ || static_cloud_->empty()) {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    geometry_msgs::Pose cylinder_pose_cloud = monitored_pose_output;
+    if (!transformPose(monitored_pose_output, output_frame_, latest_static_cloud_msg_.header.frame_id, evaluation_stamp, &cylinder_pose_cloud)) {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    const Eigen::Vector3d top_center(
+      cylinder_pose_cloud.position.x,
+      cylinder_pose_cloud.position.y,
+      cylinder_pose_cloud.position.z);
+    const double bounded_radius = std::max(0.0, cylinder_radius);
+    const double bounded_height = std::max(1e-3, cylinder_height);
+    const double bottom_z = top_center.z() - bounded_height;
+
+    double min_clearance = std::numeric_limits<double>::infinity();
+    bool found_candidate = false;
+
+    for (const auto& point : static_cloud_->points) {
+      if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        continue;
+      }
+
+      const double dx = static_cast<double>(point.x) - top_center.x();
+      const double dy = static_cast<double>(point.y) - top_center.y();
+      const double radial_distance = std::sqrt(dx * dx + dy * dy);
+      if (point.z <= bottom_z + cylinder_ground_contact_tolerance_
+          && radial_distance <= bounded_radius + cylinder_ground_contact_tolerance_) {
+        continue;
+      }
+
+      const double clearance = pointToVerticalCylinderDistance(point, top_center, bounded_radius, bounded_height);
+      min_clearance = std::min(min_clearance, clearance);
+      found_candidate = true;
+    }
+
+    if (!found_candidate) {
+      return std::numeric_limits<double>::infinity();
+    }
+    return min_clearance;
+  }
+
+  DynamicRiskMetrics evaluateSphereDynamicRisk(
     const geometry_msgs::Pose& monitored_pose_output,
     const geometry_msgs::Vector3& monitored_velocity,
     double object_radius) const
@@ -564,6 +925,120 @@ private:
     }
 
     return best_risk;
+  }
+
+  DynamicRiskMetrics evaluateCylinderDynamicRisk(
+    const geometry_msgs::Pose& monitored_pose_output,
+    const geometry_msgs::Vector3& monitored_velocity,
+    double cylinder_radius,
+    double cylinder_height) const
+  {
+    DynamicRiskMetrics best_risk;
+
+    const Eigen::Vector3d top_center(
+      monitored_pose_output.position.x,
+      monitored_pose_output.position.y,
+      monitored_pose_output.position.z);
+    const Eigen::Vector3d object_velocity_vector(
+      monitored_velocity.x,
+      monitored_velocity.y,
+      monitored_velocity.z);
+    const double object_speed = object_velocity_vector.norm();
+    const double bounded_radius = std::max(0.0, cylinder_radius);
+    const double bounded_height = std::max(1e-3, cylinder_height);
+    const double sample_dt = std::max(0.02, dynamic_prediction_sample_dt_);
+
+    for (const auto& track : latest_tracks_.tracks) {
+      if (!allow_tentative_tracks_ && track.state != lio_sam::DynamicTrack::STATE_CONFIRMED) {
+        continue;
+      }
+
+      const Eigen::Vector3d track_position(
+        track.pose.position.x,
+        track.pose.position.y,
+        track.pose.position.z);
+      const Eigen::Vector3d track_velocity(track.velocity.x, track.velocity.y, track.velocity.z);
+
+      auto clearanceAtTime = [&](double time_sec) {
+        const Eigen::Vector3d top_at_time = top_center + object_velocity_vector * time_sec;
+        const Eigen::Vector3d track_at_time = track_position + track_velocity * time_sec;
+        const double distance_to_cylinder = pointToVerticalCylinderDistance(
+          track_at_time,
+          top_at_time,
+          bounded_radius,
+          bounded_height);
+        return std::max(0.0, distance_to_cylinder - assumed_dynamic_track_radius_);
+      };
+
+      const double current_clearance = clearanceAtTime(0.0);
+      double predicted_clearance = current_clearance;
+      double ttc = current_clearance <= 0.0 ? 0.0 : std::numeric_limits<double>::infinity();
+
+      for (double time_sec = sample_dt; time_sec <= prediction_horizon_sec_ + 1e-6; time_sec += sample_dt) {
+        const double bounded_time = std::min(time_sec, prediction_horizon_sec_);
+        const double clearance = clearanceAtTime(bounded_time);
+        predicted_clearance = std::min(predicted_clearance, clearance);
+        if (!std::isfinite(ttc) && clearance <= 0.0) {
+          ttc = bounded_time;
+        }
+      }
+
+      const double relative_speed = (current_clearance - clearanceAtTime(std::min(prediction_horizon_sec_, sample_dt))) / sample_dt;
+
+      bool head_on = false;
+      const double track_speed = track_velocity.norm();
+      if (object_speed > min_closing_speed_ && track_speed > min_closing_speed_) {
+        const double cosine = object_velocity_vector.normalized().dot(track_velocity.normalized());
+        head_on = relative_speed > head_on_closing_speed_ && cosine < head_on_cosine_threshold_;
+      } else {
+        head_on = relative_speed > head_on_closing_speed_ && predicted_clearance < dynamic_warning_clearance_;
+      }
+
+      uint8_t level = classifyDynamicLevel(current_clearance, predicted_clearance, ttc);
+      if (head_on && level > lio_sam::WarningState::LEVEL_NONE) {
+        level = std::min<uint8_t>(lio_sam::WarningState::LEVEL_EMERGENCY, level + 1);
+      }
+
+      const bool better_level = level > best_risk.level;
+      const bool better_gap = level == best_risk.level && predicted_clearance < best_risk.predicted_clearance;
+      const bool better_ttc = level == best_risk.level
+        && std::fabs(predicted_clearance - best_risk.predicted_clearance) < 1e-3
+        && ttc < best_risk.ttc;
+      if (!better_level && !better_gap && !better_ttc) {
+        continue;
+      }
+
+      best_risk.track_id = track.track_id;
+      best_risk.current_clearance = current_clearance;
+      best_risk.predicted_clearance = predicted_clearance;
+      best_risk.relative_speed = relative_speed;
+      best_risk.ttc = ttc;
+      best_risk.head_on = head_on;
+      best_risk.level = level;
+      best_risk.track_position = track.pose.position;
+    }
+
+    return best_risk;
+  }
+
+  double cylinderRadius(const lio_sam::SegmentedObjectState& object) const
+  {
+    const double from_size = 0.5 * std::max(static_cast<double>(object.size.x), static_cast<double>(object.size.y));
+    if (from_size > 1e-3) {
+      return from_size;
+    }
+    if (object.bounding_radius > 1e-3f) {
+      return std::min(static_cast<double>(object.bounding_radius), default_cylinder_radius_);
+    }
+    return default_cylinder_radius_;
+  }
+
+  double cylinderHeight(const lio_sam::SegmentedObjectState& object) const
+  {
+    if (object.size.z > 1e-3f) {
+      return static_cast<double>(object.size.z);
+    }
+    return default_cylinder_height_;
   }
 
   uint8_t classifyStaticLevel(double clearance) const
@@ -668,6 +1143,32 @@ private:
     return "dynamic_current_clearance";
   }
 
+  bool isHigherRisk(const SourceEvaluation& lhs, const SourceEvaluation& rhs) const
+  {
+    if (lhs.desired_level != rhs.desired_level) {
+      return lhs.desired_level > rhs.desired_level;
+    }
+
+    const double lhs_clearance = bestClearanceMetric(lhs);
+    const double rhs_clearance = bestClearanceMetric(rhs);
+    if (std::isfinite(lhs_clearance) && std::isfinite(rhs_clearance) && std::fabs(lhs_clearance - rhs_clearance) > 1e-3) {
+      return lhs_clearance < rhs_clearance;
+    }
+    if (std::isfinite(lhs_clearance) != std::isfinite(rhs_clearance)) {
+      return std::isfinite(lhs_clearance);
+    }
+
+    if (std::isfinite(lhs.dynamic_risk.ttc) && std::isfinite(rhs.dynamic_risk.ttc)
+        && std::fabs(lhs.dynamic_risk.ttc - rhs.dynamic_risk.ttc) > 1e-3) {
+      return lhs.dynamic_risk.ttc < rhs.dynamic_risk.ttc;
+    }
+    if (std::isfinite(lhs.dynamic_risk.ttc) != std::isfinite(rhs.dynamic_risk.ttc)) {
+      return std::isfinite(lhs.dynamic_risk.ttc);
+    }
+
+    return false;
+  }
+
   void publishWarningState(
     lio_sam::WarningState& message,
     bool publish_markers,
@@ -695,7 +1196,9 @@ private:
     clear_marker.action = visualization_msgs::Marker::DELETEALL;
     markers.markers.push_back(clear_marker);
 
-    if (message.reason == "waiting_for_inputs" || message.reason == "no_monitored_object" || message.reason == "object_tf_failed") {
+    if (message.reason == "waiting_for_inputs"
+        || message.reason.find("no_monitored_object") != std::string::npos
+        || message.reason.find("object_tf_failed") != std::string::npos) {
       pub_markers_.publish(markers);
       return;
     }
@@ -734,6 +1237,7 @@ private:
     text_stream.setf(std::ios::fixed);
     text_stream.precision(2);
     text_stream << levelToText(message.active_level)
+                << " obj=" << message.monitored_class_name
                 << " src=" << message.source;
     if (std::isfinite(message.static_clearance)) {
       text_stream << " ds=" << message.static_clearance;
@@ -784,17 +1288,17 @@ private:
   {
     active_level_ = lio_sam::WarningState::LEVEL_NONE;
     pending_lower_level_ = lio_sam::WarningState::LEVEL_NONE;
-    has_previous_object_ = false;
-    object_velocity_.x = 0.0;
-    object_velocity_.y = 0.0;
-    object_velocity_.z = 0.0;
+    pending_lower_since_ = ros::Time();
+    visual_motion_state_ = ObjectMotionState();
+    cylinder_motion_state_ = ObjectMotionState();
   }
 
 private:
   ros::NodeHandle nh_;
   ros::NodeHandle pnh_;
 
-  ros::Subscriber sub_objects_;
+  ros::Subscriber sub_visual_objects_;
+  ros::Subscriber sub_cylinder_objects_;
   ros::Subscriber sub_tracks_;
   ros::Subscriber sub_static_cloud_;
 
@@ -804,26 +1308,30 @@ private:
   tf2_ros::Buffer tf_buffer_;
   tf2_ros::TransformListener tf_listener_;
 
-  lio_sam::SegmentedObjectStateArray latest_objects_;
+  lio_sam::SegmentedObjectStateArray latest_visual_objects_;
+  lio_sam::SegmentedObjectStateArray latest_cylinder_objects_;
   lio_sam::DynamicTrackArray latest_tracks_;
   sensor_msgs::PointCloud2 latest_static_cloud_msg_;
 
   pcl::PointCloud<pcl::PointXYZI>::Ptr static_cloud_;
   pcl::KdTreeFLANN<pcl::PointXYZI> static_kdtree_;
 
-  std::string segment_objects_topic_;
+  std::string visual_objects_topic_;
+  std::string cylinder_objects_topic_;
   std::string dynamic_tracks_topic_;
   std::string static_cloud_topic_;
   std::string warning_topic_;
   std::string marker_topic_;
   std::string output_frame_;
+  std::string monitored_source_mode_raw_;
+  std::string cylinder_class_name_;
 
-  bool has_objects_{false};
+  bool has_visual_objects_{false};
+  bool has_cylinder_objects_{false};
   bool has_tracks_{false};
   bool has_static_cloud_{false};
   bool allow_tentative_tracks_{false};
   bool publish_markers_{true};
-  bool has_previous_object_{false};
 
   double object_stale_timeout_sec_{0.5};
   double track_stale_timeout_sec_{1.0};
@@ -833,6 +1341,7 @@ private:
   int min_object_points_{25};
   double assumed_dynamic_track_radius_{0.4};
   double prediction_horizon_sec_{2.0};
+  double dynamic_prediction_sample_dt_{0.1};
   double min_closing_speed_{0.05};
   double head_on_closing_speed_{0.4};
   double head_on_cosine_threshold_{-0.2};
@@ -849,14 +1358,17 @@ private:
   double notice_ttc_sec_{3.0};
   double warning_ttc_sec_{2.0};
   double emergency_ttc_sec_{1.0};
+  double default_cylinder_radius_{2.0};
+  double default_cylinder_height_{3.0};
+  double cylinder_ground_contact_tolerance_{0.15};
 
   uint8_t active_level_{lio_sam::WarningState::LEVEL_NONE};
   uint8_t pending_lower_level_{lio_sam::WarningState::LEVEL_NONE};
   ros::Time pending_lower_since_;
 
-  geometry_msgs::Point last_object_position_;
-  ros::Time last_object_stamp_;
-  geometry_msgs::Vector3 object_velocity_;
+  MonitoredSourceMode monitored_source_mode_{MonitoredSourceMode::Visual};
+  ObjectMotionState visual_motion_state_;
+  ObjectMotionState cylinder_motion_state_;
   std::vector<std::string> monitored_class_names_;
 };
 

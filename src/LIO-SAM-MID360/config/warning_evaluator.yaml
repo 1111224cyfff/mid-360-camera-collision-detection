@@ -1,10 +1,17 @@
 warning_evaluator:
-  segment_objects_topic: /segment/object_states
+  visual_objects_topic: /segment/object_states
+  cylinder_objects_topic: /warning/cylinder_object_states
+  monitored_source_mode: visual
   dynamic_tracks_topic: /dynamic_tracker/track_states
   static_cloud_topic: /lio_sam/mapping/map_local
   warning_topic: /warning/state
   marker_topic: /warning/markers
   output_frame: map
+  cylinder_class_name: synthetic_cylinder
+  default_cylinder_radius: 2.0
+  default_cylinder_height: 3.0
+  cylinder_ground_contact_tolerance: 0.15
+  dynamic_prediction_sample_dt: 0.1
 
   monitored_class_names: [crane, exca-arm, exca-body]
 

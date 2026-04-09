@@ -83,6 +83,12 @@ struct SourceEvaluation
   uint8_t desired_level{lio_sam::WarningState::LEVEL_NONE};
 };
 
+struct CylinderJudgmentState
+{
+  geometry_msgs::Pose pose;
+  geometry_msgs::Vector3 velocity;
+};
+
 double clampValue(double value, double low, double high)
 {
   return std::max(low, std::min(value, high));
@@ -239,6 +245,7 @@ public:
     pnh_.param<double>("object_stale_timeout", object_stale_timeout_sec_, 0.5);
     pnh_.param<double>("track_stale_timeout", track_stale_timeout_sec_, 1.0);
     pnh_.param<double>("static_cloud_stale_timeout", static_cloud_stale_timeout_sec_, 1.0);
+    pnh_.param<bool>("enable_static_warning", enable_static_warning_, true);
     pnh_.param<double>("transform_timeout_sec", transform_timeout_sec_, 0.05);
     pnh_.param<double>("min_object_confidence", min_object_confidence_, 0.35);
     pnh_.param<int>("min_object_points", min_object_points_, 25);
@@ -269,6 +276,9 @@ public:
     pnh_.param<double>("default_cylinder_radius", default_cylinder_radius_, 2.0);
     pnh_.param<double>("default_cylinder_height", default_cylinder_height_, 3.0);
     pnh_.param<double>("cylinder_ground_contact_tolerance", cylinder_ground_contact_tolerance_, 0.15);
+    pnh_.param<double>("cylinder_judgment_z_offset_m", cylinder_judgment_z_offset_m_, -5.0);
+    pnh_.param<bool>("ignore_dynamic_tracks_inside_cylinder", ignore_dynamic_tracks_inside_cylinder_, true);
+    pnh_.param<double>("inside_cylinder_ignore_epsilon", inside_cylinder_ignore_epsilon_, 1e-3);
 
     monitored_source_mode_ = parseMonitoredSourceMode(monitored_source_mode_raw_);
     loadMonitoredClassNames();
@@ -403,6 +413,7 @@ private:
       && !isArrayStale(latest_static_cloud_msg_.header.stamp, static_cloud_stale_timeout_sec_, evaluation_stamp)
       && static_cloud_
       && !static_cloud_->empty();
+    const bool static_warning_ready = enable_static_warning_ && static_ready;
 
     std::vector<SourceEvaluation> evaluations;
     bool any_source_ready = false;
@@ -413,7 +424,7 @@ private:
         ObjectSourceKind::Visual,
         latest_visual_objects_,
         evaluation_stamp,
-        static_ready,
+        static_warning_ready,
         track_ready));
     }
     if (cylinder_ready) {
@@ -422,7 +433,7 @@ private:
         ObjectSourceKind::Cylinder,
         latest_cylinder_objects_,
         evaluation_stamp,
-        static_ready,
+        static_warning_ready,
         track_ready));
     }
 
@@ -482,7 +493,7 @@ private:
     }
     out.dynamic_track_id = best_evaluation->dynamic_risk.track_id;
     out.head_on = best_evaluation->dynamic_risk.head_on;
-    out.system_ready = static_ready || track_ready;
+    out.system_ready = static_warning_ready || track_ready;
 
     if (!out.system_ready) {
       out.reason = prefixReason(best_evaluation->source_kind, "missing_static_and_dynamic_context");
@@ -548,12 +559,24 @@ private:
       evaluation.monitored_pose_output.position,
       resolveStamp(objects_msg.header.stamp));
 
+    const double selected_cylinder_radius = cylinderRadius(evaluation.selected_object);
+    const double selected_cylinder_height = cylinderHeight(evaluation.selected_object);
+    CylinderJudgmentState cylinder_judgment_state;
+    if (source_kind == ObjectSourceKind::Cylinder) {
+      cylinder_judgment_state = buildCylinderJudgmentState(
+        evaluation.monitored_pose_output,
+        evaluation.monitored_velocity,
+        selected_cylinder_height);
+      evaluation.monitored_pose_output = cylinder_judgment_state.pose;
+      evaluation.monitored_velocity = cylinder_judgment_state.velocity;
+    }
+
     if (static_ready) {
       if (source_kind == ObjectSourceKind::Cylinder) {
         evaluation.static_clearance = computeCylinderStaticClearance(
-          evaluation.monitored_pose_output,
-          cylinderRadius(evaluation.selected_object),
-          cylinderHeight(evaluation.selected_object),
+          cylinder_judgment_state.pose,
+          selected_cylinder_radius,
+          selected_cylinder_height,
           evaluation_stamp);
       } else {
         evaluation.static_clearance = computeStaticClearance(
@@ -566,10 +589,10 @@ private:
     if (track_ready) {
       if (source_kind == ObjectSourceKind::Cylinder) {
         evaluation.dynamic_risk = evaluateCylinderDynamicRisk(
-          evaluation.monitored_pose_output,
-          evaluation.monitored_velocity,
-          cylinderRadius(evaluation.selected_object),
-          cylinderHeight(evaluation.selected_object));
+          cylinder_judgment_state.pose,
+          cylinder_judgment_state.velocity,
+          selected_cylinder_radius,
+          selected_cylinder_height);
       } else {
         evaluation.dynamic_risk = evaluateSphereDynamicRisk(
           evaluation.monitored_pose_output,
@@ -755,6 +778,22 @@ private:
     return source_kind == ObjectSourceKind::Cylinder ? cylinder_motion_state_ : visual_motion_state_;
   }
 
+  CylinderJudgmentState buildCylinderJudgmentState(
+    const geometry_msgs::Pose& monitored_pose_output,
+    const geometry_msgs::Vector3& monitored_velocity,
+    double cylinder_height) const
+  {
+    CylinderJudgmentState state;
+    state.pose = monitored_pose_output;
+    state.velocity = monitored_velocity;
+
+    const double bounded_height = std::max(1e-3, cylinder_height);
+    const double bottom_z = monitored_pose_output.position.z - bounded_height;
+    const double offset_z = monitored_pose_output.position.z + cylinder_judgment_z_offset_m_;
+    state.pose.position.z = std::max(offset_z, bottom_z);
+    return state;
+  }
+
   double computeStaticClearance(
     const geometry_msgs::Pose& monitored_pose_output,
     double object_radius,
@@ -859,6 +898,7 @@ private:
         track.pose.position.x,
         track.pose.position.y,
         track.pose.position.z);
+
       const Eigen::Vector3d track_velocity(track.velocity.x, track.velocity.y, track.velocity.z);
 
       const Eigen::Vector3d relative_position = track_position - object_position;
@@ -957,6 +997,17 @@ private:
         track.pose.position.x,
         track.pose.position.y,
         track.pose.position.z);
+      if (ignore_dynamic_tracks_inside_cylinder_) {
+        const double distance_to_cylinder_surface = pointToVerticalCylinderDistance(
+          track_position,
+          top_center,
+          bounded_radius,
+          bounded_height);
+        if (distance_to_cylinder_surface <= inside_cylinder_ignore_epsilon_) {
+          continue;
+        }
+      }
+
       const Eigen::Vector3d track_velocity(track.velocity.x, track.velocity.y, track.velocity.z);
 
       auto clearanceAtTime = [&](double time_sec) {
@@ -1217,8 +1268,26 @@ private:
     sphere.scale.y = marker_scale;
     sphere.scale.z = marker_scale;
     sphere.color = colorForLevel(message.active_level);
+    sphere.color.a = 0.45f;
     sphere.lifetime = ros::Duration(0.4);
     markers.markers.push_back(sphere);
+
+    visualization_msgs::Marker point;
+    point.header = message.header;
+    point.ns = "warning_judgment_point";
+    point.id = 5;
+    point.type = visualization_msgs::Marker::SPHERE;
+    point.action = visualization_msgs::Marker::ADD;
+    point.pose = message.monitored_pose;
+    point.scale.x = 0.18;
+    point.scale.y = 0.18;
+    point.scale.z = 0.18;
+    point.color.r = 1.0f;
+    point.color.g = 1.0f;
+    point.color.b = 1.0f;
+    point.color.a = 1.0f;
+    point.lifetime = ros::Duration(0.4);
+    markers.markers.push_back(point);
 
     visualization_msgs::Marker text;
     text.header = message.header;
@@ -1227,8 +1296,8 @@ private:
     text.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
     text.action = visualization_msgs::Marker::ADD;
     text.pose = message.monitored_pose;
-    text.pose.position.z += 0.8;
-    text.scale.z = 0.35;
+    text.pose.position.z += 1.0;
+    text.scale.z = 0.45;
     text.color.r = 1.0f;
     text.color.g = 1.0f;
     text.color.b = 1.0f;
@@ -1236,11 +1305,18 @@ private:
     std::ostringstream text_stream;
     text_stream.setf(std::ios::fixed);
     text_stream.precision(2);
-    text_stream << levelToText(message.active_level)
-                << " obj=" << message.monitored_class_name
-                << " src=" << message.source;
+    text_stream << "LEVEL=" << levelToText(message.active_level)
+                << " desired=" << levelToText(message.desired_level)
+                << " obj=" << message.monitored_class_name;
+    if (!message.reason.empty()) {
+      text_stream << "\nreason=" << message.reason;
+    }
+    text_stream << "\nsrc=" << message.source;
     if (std::isfinite(message.static_clearance)) {
       text_stream << " ds=" << message.static_clearance;
+    }
+    if (std::isfinite(message.dynamic_clearance)) {
+      text_stream << " dc=" << message.dynamic_clearance;
     }
     if (std::isfinite(message.predicted_clearance)) {
       text_stream << " dd=" << message.predicted_clearance;
@@ -1248,9 +1324,32 @@ private:
     if (std::isfinite(message.ttc)) {
       text_stream << " ttc=" << message.ttc;
     }
+    if (std::isfinite(message.relative_speed)) {
+      text_stream << " rv=" << message.relative_speed;
+    }
+    if (message.dynamic_track_id >= 0) {
+      text_stream << "\ntrack=" << message.dynamic_track_id;
+    }
+    if (message.head_on) {
+      text_stream << " head_on=true";
+    }
     text.text = text_stream.str();
     text.lifetime = ros::Duration(0.4);
     markers.markers.push_back(text);
+
+    visualization_msgs::Marker badge;
+    badge.header = message.header;
+    badge.ns = "warning_badge";
+    badge.id = 4;
+    badge.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+    badge.action = visualization_msgs::Marker::ADD;
+    badge.pose = message.monitored_pose;
+    badge.pose.position.z += 2.0;
+    badge.scale.z = 0.8;
+    badge.color = colorForLevel(message.active_level);
+    badge.text = levelToText(message.active_level);
+    badge.lifetime = ros::Duration(0.4);
+    markers.markers.push_back(badge);
 
     if (dynamic_risk.track_id >= 0) {
       visualization_msgs::Marker line;
@@ -1332,6 +1431,7 @@ private:
   bool has_static_cloud_{false};
   bool allow_tentative_tracks_{false};
   bool publish_markers_{true};
+  bool enable_static_warning_{true};
 
   double object_stale_timeout_sec_{0.5};
   double track_stale_timeout_sec_{1.0};
@@ -1361,6 +1461,9 @@ private:
   double default_cylinder_radius_{2.0};
   double default_cylinder_height_{3.0};
   double cylinder_ground_contact_tolerance_{0.15};
+  double cylinder_judgment_z_offset_m_{-5.0};
+  bool ignore_dynamic_tracks_inside_cylinder_{true};
+  double inside_cylinder_ignore_epsilon_{1e-3};
 
   uint8_t active_level_{lio_sam::WarningState::LEVEL_NONE};
   uint8_t pending_lower_level_{lio_sam::WarningState::LEVEL_NONE};

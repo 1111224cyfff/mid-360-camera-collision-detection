@@ -11,6 +11,9 @@ warning_evaluator:
   default_cylinder_radius: 2.0
   default_cylinder_height: 3.0
   cylinder_ground_contact_tolerance: 0.15
+  cylinder_judgment_z_offset_m: -5.0
+  ignore_dynamic_tracks_inside_cylinder: true
+  inside_cylinder_ignore_epsilon: 0.001
   dynamic_prediction_sample_dt: 0.1
 
   monitored_class_names: [crane, exca-arm, exca-body]
@@ -18,6 +21,7 @@ warning_evaluator:
   object_stale_timeout: 0.5
   track_stale_timeout: 1.0
   static_cloud_stale_timeout: 1.0
+  enable_static_warning: false
   transform_timeout_sec: 0.05
 
   min_object_confidence: 0.35

@@ -1,8 +1,8 @@
 cylinder_object_source:
-  input_cloud_topic: /lio_sam/mapping/map_local
+  input_cloud_topic: /merged_pointcloud_leveled
+  output_frame: map
   output_topic: /warning/cylinder_object_states
   marker_topic: /warning/cylinder_object_markers
-  base_frame: base_link
 
   object_class_name: synthetic_cylinder
   object_class_id: -100

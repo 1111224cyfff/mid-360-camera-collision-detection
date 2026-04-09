@@ -1,10 +1,11 @@
 #include <ros/ros.h>
 
-#include <geometry_msgs/TransformStamped.h>
+#include <geometry_msgs/PoseStamped.h>
 #include <lio_sam/SegmentedObjectState.h>
 #include <lio_sam/SegmentedObjectStateArray.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <std_msgs/ColorRGBA.h>
+#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
 #include <tf2_ros/buffer.h>
 #include <tf2_ros/transform_listener.h>
 #include <visualization_msgs/MarkerArray.h>
@@ -45,10 +46,10 @@ public:
   : pnh_("~")
   , tf_listener_(tf_buffer_)
   {
-    pnh_.param<std::string>("input_cloud_topic", input_cloud_topic_, std::string("/lio_sam/mapping/map_local"));
+    pnh_.param<std::string>("input_cloud_topic", input_cloud_topic_, std::string("/merged_pointcloud_leveled"));
+    pnh_.param<std::string>("output_frame", output_frame_, std::string("map"));
     pnh_.param<std::string>("output_topic", output_topic_, std::string("/warning/cylinder_object_states"));
     pnh_.param<std::string>("marker_topic", marker_topic_, std::string("/warning/cylinder_object_markers"));
-    pnh_.param<std::string>("base_frame", base_frame_, std::string("base_link"));
     pnh_.param<std::string>("object_class_name", object_class_name_, std::string("synthetic_cylinder"));
     pnh_.param<int>("object_class_id", object_class_id_, -100);
     pnh_.param<double>("radius", radius_m_, 2.0);
@@ -69,8 +70,8 @@ public:
     }
 
     ROS_INFO_STREAM("[cylinder_object_source] input_cloud_topic=" << input_cloud_topic_
+                    << " output_frame=" << output_frame_
                     << " output_topic=" << output_topic_
-                    << " base_frame=" << base_frame_
                     << " radius=" << radius_m_
                     << " default_height=" << default_height_m_);
   }
@@ -85,15 +86,6 @@ private:
     pcl::PointCloud<pcl::PointXYZI> cloud;
     pcl::fromROSMsg(*msg, cloud);
 
-    geometry_msgs::TransformStamped base_in_cloud;
-    if (!lookupBaseTransform(msg->header.frame_id, resolveStamp(msg->header.stamp), &base_in_cloud)) {
-      return;
-    }
-
-    const double center_x = base_in_cloud.transform.translation.x;
-    const double center_y = base_in_cloud.transform.translation.y;
-    const double center_z = base_in_cloud.transform.translation.z;
-
     std::vector<double> support_z_values;
     support_z_values.reserve(cloud.points.size());
 
@@ -102,43 +94,52 @@ private:
         continue;
       }
 
-      const double radial_distance = std::hypot(
-        static_cast<double>(point.x) - center_x,
-        static_cast<double>(point.y) - center_y);
+      const double radial_distance = std::hypot(static_cast<double>(point.x), static_cast<double>(point.y));
       if (radial_distance > radius_m_) {
         continue;
       }
-      if (point.z > center_z - min_support_drop_m_) {
+      if (point.z > -min_support_drop_m_) {
         continue;
       }
 
       support_z_values.push_back(static_cast<double>(point.z));
     }
 
-    bool used_fallback = true;
-    double height_m = default_height_m_;
-    if (static_cast<int>(support_z_values.size()) >= min_support_points_) {
+    double contact_z_estimate = std::numeric_limits<double>::quiet_NaN();
+    if (!support_z_values.empty()) {
       std::sort(support_z_values.begin(), support_z_values.end());
       const double percentile = clampValue(contact_percentile_, 0.0, 1.0);
       const size_t index = static_cast<size_t>(std::floor(percentile * static_cast<double>(support_z_values.size() - 1)));
-      const double contact_z = support_z_values[index];
-      height_m = std::max(min_height_m_, center_z - contact_z);
+      contact_z_estimate = support_z_values[index];
+    }
+
+    bool used_fallback = true;
+    double height_m = default_height_m_;
+    if (static_cast<int>(support_z_values.size()) >= min_support_points_) {
+      height_m = std::max(min_height_m_, -contact_z_estimate);
       used_fallback = false;
     }
 
     const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
 
+    geometry_msgs::Pose top_pose_output;
+    if (!buildTopPoseOutput(msg->header.frame_id, stamp, &top_pose_output)) {
+      return;
+    }
+
     lio_sam::SegmentedObjectStateArray out;
     out.header = msg->header;
     out.header.stamp = stamp;
+    out.header.frame_id = output_frame_;
 
     lio_sam::SegmentedObjectState object_state;
     object_state.class_id = object_class_id_;
     object_state.class_name = object_class_name_;
     object_state.confidence = static_cast<float>(used_fallback ? fallback_confidence_ : object_confidence_);
-    object_state.pose.position.x = center_x;
-    object_state.pose.position.y = center_y;
-    object_state.pose.position.z = center_z;
+    object_state.pose = top_pose_output;
+    object_state.pose.orientation.x = 0.0;
+    object_state.pose.orientation.y = 0.0;
+    object_state.pose.orientation.z = 0.0;
     object_state.pose.orientation.w = 1.0;
     object_state.size.x = static_cast<float>(2.0 * radius_m_);
     object_state.size.y = static_cast<float>(2.0 * radius_m_);
@@ -151,56 +152,87 @@ private:
     pub_objects_.publish(out);
 
     if (publish_markers_) {
-      publishMarkers(out.header, center_x, center_y, center_z, height_m, used_fallback, support_z_values.size());
+      publishMarkers(out.header, top_pose_output.position, height_m, used_fallback, support_z_values.size());
     }
   }
 
-  bool lookupBaseTransform(
-    const std::string& target_frame,
+  bool buildTopPoseOutput(
+    const std::string& source_frame,
     const ros::Time& stamp,
-    geometry_msgs::TransformStamped* transform)
+    geometry_msgs::Pose* top_pose_output)
   {
-    if (!transform) {
+    if (!top_pose_output) {
       return false;
     }
 
+    geometry_msgs::Pose source_top_pose;
+    source_top_pose.orientation.w = 1.0;
+    if (!transformPose(source_top_pose, source_frame, output_frame_, stamp, top_pose_output)) {
+      return false;
+    }
+
+    // Keep the cylinder aligned to the output frame so it always extends along -Z of that frame.
+    top_pose_output->orientation.x = 0.0;
+    top_pose_output->orientation.y = 0.0;
+    top_pose_output->orientation.z = 0.0;
+    top_pose_output->orientation.w = 1.0;
+    return true;
+  }
+
+  bool transformPose(
+    const geometry_msgs::Pose& source_pose,
+    const std::string& source_frame,
+    const std::string& target_frame,
+    const ros::Time& stamp,
+    geometry_msgs::Pose* transformed_pose)
+  {
+    if (!transformed_pose) {
+      return false;
+    }
+    if (source_frame.empty() || target_frame.empty() || source_frame == target_frame) {
+      *transformed_pose = source_pose;
+      return true;
+    }
+
+    geometry_msgs::PoseStamped pose_stamped;
+    pose_stamped.header.stamp = stamp;
+    pose_stamped.header.frame_id = source_frame;
+    pose_stamped.pose = source_pose;
+
     try {
-      *transform = tf_buffer_.lookupTransform(
+      const geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
         target_frame,
-        base_frame_,
+        source_frame,
         stamp,
         ros::Duration(transform_timeout_sec_));
+      tf2::doTransform(pose_stamped, pose_stamped, transform);
+      *transformed_pose = pose_stamped.pose;
       return true;
     } catch (const tf2::TransformException&) {
     }
 
     try {
-      *transform = tf_buffer_.lookupTransform(
+      const geometry_msgs::TransformStamped transform = tf_buffer_.lookupTransform(
         target_frame,
-        base_frame_,
+        source_frame,
         ros::Time(0),
         ros::Duration(transform_timeout_sec_));
+      tf2::doTransform(pose_stamped, pose_stamped, transform);
+      *transformed_pose = pose_stamped.pose;
       return true;
     } catch (const tf2::TransformException& ex) {
       ROS_WARN_THROTTLE(2.0,
-                        "[cylinder_object_source] Failed to lookup transform from %s to %s: %s",
-                        base_frame_.c_str(),
+                        "[cylinder_object_source] Failed to transform pose from %s to %s: %s",
+                        source_frame.c_str(),
                         target_frame.c_str(),
                         ex.what());
       return false;
     }
   }
 
-  ros::Time resolveStamp(const ros::Time& stamp) const
-  {
-    return stamp.isZero() ? ros::Time::now() : stamp;
-  }
-
   void publishMarkers(
     const std_msgs::Header& header,
-    double center_x,
-    double center_y,
-    double center_z,
+    const geometry_msgs::Point& top_center,
     double height_m,
     bool used_fallback,
     size_t support_points)
@@ -219,13 +251,12 @@ private:
     cylinder_marker.type = visualization_msgs::Marker::CYLINDER;
     cylinder_marker.action = visualization_msgs::Marker::ADD;
     cylinder_marker.pose.orientation.w = 1.0;
-    cylinder_marker.pose.position.x = center_x;
-    cylinder_marker.pose.position.y = center_y;
-    cylinder_marker.pose.position.z = center_z - 0.5 * height_m;
+    cylinder_marker.pose.position = top_center;
+    cylinder_marker.pose.position.z -= 0.5 * height_m;
     cylinder_marker.scale.x = 2.0 * radius_m_;
     cylinder_marker.scale.y = 2.0 * radius_m_;
     cylinder_marker.scale.z = height_m;
-    cylinder_marker.color = used_fallback ? makeColor(0.95f, 0.5f, 0.1f, 0.35f) : makeColor(0.15f, 0.7f, 0.9f, 0.35f);
+    cylinder_marker.color = used_fallback ? makeColor(0.72f, 0.30f, 0.04f, 0.55f) : makeColor(0.04f, 0.36f, 0.58f, 0.55f);
     cylinder_marker.lifetime = ros::Duration(0.25);
     markers.markers.push_back(cylinder_marker);
 
@@ -236,9 +267,7 @@ private:
     top_marker.type = visualization_msgs::Marker::SPHERE;
     top_marker.action = visualization_msgs::Marker::ADD;
     top_marker.pose.orientation.w = 1.0;
-    top_marker.pose.position.x = center_x;
-    top_marker.pose.position.y = center_y;
-    top_marker.pose.position.z = center_z;
+    top_marker.pose.position = top_center;
     top_marker.scale.x = 0.3;
     top_marker.scale.y = 0.3;
     top_marker.scale.z = 0.3;
@@ -253,9 +282,8 @@ private:
     text_marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
     text_marker.action = visualization_msgs::Marker::ADD;
     text_marker.pose.orientation.w = 1.0;
-    text_marker.pose.position.x = center_x;
-    text_marker.pose.position.y = center_y;
-    text_marker.pose.position.z = center_z + 0.3;
+    text_marker.pose.position = top_center;
+    text_marker.pose.position.z += 0.3;
     text_marker.scale.z = 0.25;
     text_marker.color = makeColor(1.0f, 1.0f, 1.0f, 1.0f);
     text_marker.text = used_fallback
@@ -279,9 +307,9 @@ private:
   tf2_ros::TransformListener tf_listener_;
 
   std::string input_cloud_topic_;
+  std::string output_frame_;
   std::string output_topic_;
   std::string marker_topic_;
-  std::string base_frame_;
   std::string object_class_name_;
 
   int object_class_id_{-100};

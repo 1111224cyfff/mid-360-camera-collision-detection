@@ -27,6 +27,7 @@ __pycache__/
 # Editors
 .vscode/
 .idea/
+.venv/
 
 # OS
 .DS_Store
@@ -36,3 +37,11 @@ src/yolo26_ros/weights/
 
 #
 src/CMakeLists.txt
+
+#
+datasets/
+runs/
+data/
+
+#
+temp.txt

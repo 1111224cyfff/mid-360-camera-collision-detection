@@ -10,6 +10,12 @@
   <arg name="leveler_min_imu_samples" default="200" />
   <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
   <!-- 该测试入口只验证 body_leveled 侧的传感器/投影链，不启动 LIO-SAM 建图世界系。 -->
+  <arg name="enable_pointcloud_downsample" default="true" />
+  <arg name="pointcloud_leaf_size_m" default="0.2" />
+  <arg name="leveler_calib_duration_sec" default="1.0" />
+  <arg name="leveler_min_imu_samples" default="200" />
+  <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
+  <!-- 该测试入口只验证 body_leveled 侧的传感器/投影链，不启动 LIO-SAM 建图世界系。 -->
   <arg name="odometry_frame" default="odom" />
   <arg name="world_frame" default="map" />
 
@@ -22,6 +28,11 @@
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
 
   <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
+  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch">
+    <arg name="calib_duration_sec" value="$(arg leveler_calib_duration_sec)" />
+    <arg name="min_imu_samples" value="$(arg leveler_min_imu_samples)" />
+    <arg name="calib_max_gyro_norm_rad_s" value="$(arg leveler_calib_max_gyro_norm_rad_s)" />
+  </include>
   <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch">
     <arg name="calib_duration_sec" value="$(arg leveler_calib_duration_sec)" />
     <arg name="min_imu_samples" value="$(arg leveler_min_imu_samples)" />
@@ -40,6 +51,8 @@
     <include file="$(find system_bringup)/launch/run_segment_yolo26.launch">
       <arg name="bag_file" value="$(arg bag_file)" />
       <arg name="launch_rviz" value="$(arg detector_rviz)" />
+      <arg name="enable_pointcloud_downsample" value="$(arg enable_pointcloud_downsample)" />
+      <arg name="pointcloud_leaf_size_m" value="$(arg pointcloud_leaf_size_m)" />
       <arg name="enable_pointcloud_downsample" value="$(arg enable_pointcloud_downsample)" />
       <arg name="pointcloud_leaf_size_m" value="$(arg pointcloud_leaf_size_m)" />
     </include>

@@ -1,6 +1,7 @@
 <launch>
 
     <arg name="project" default="lio_sam"/>
+    <arg name="launch_rviz" default="true"/>
 
     <!-- 指定打印输出的日志等级（调试启动抖动/等待IMU等问题时建议用 warn/info） -->
     <env name="ROSCONSOLE_CONFIG_FILE" value="$(find lio_sam)/launch/include/rosconsole/rosconsole_warn.conf"/>
@@ -18,6 +19,8 @@
     <!-- <include file="$(find lio_sam)/launch/include/module_navsat.launch" /> -->
 
     <!--- Run Rviz-->
-    <include file="$(find lio_sam)/launch/include/module_rviz.launch" />
+    <group if="$(arg launch_rviz)">
+        <include file="$(find lio_sam)/launch/include/module_rviz.launch" />
+    </group>
 
 </launch>

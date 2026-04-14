@@ -13,6 +13,8 @@ set(CMAKE_INSTALL_RPATH "/usr/lib/aarch64-linux-gnu:${CMAKE_INSTALL_RPATH}")
 
 find_package(catkin REQUIRED COMPONENTS
   tf
+  tf2_geometry_msgs
+  tf2_ros
   roscpp
   rospy
   # pcl library
@@ -36,6 +38,12 @@ add_message_files(
   DIRECTORY msg
   FILES
   cloud_info.msg
+  DynamicTrack.msg
+  DynamicTrackArray.msg
+  ControlCommand.msg
+  SegmentedObjectState.msg
+  SegmentedObjectStateArray.msg
+  WarningState.msg
 )
 
 add_service_files(
@@ -63,6 +71,8 @@ catkin_package(
   sensor_msgs
   message_runtime
   message_generation
+  tf2_geometry_msgs
+  tf2_ros
   visualization_msgs
 )
 
@@ -109,4 +119,20 @@ target_link_libraries(${PROJECT_NAME}_imuPreintegration Boost::timer ${catkin_LI
 
 # Dynamic cluster tracker (ID + velocity + prediction markers)
 add_executable(${PROJECT_NAME}_dynamicTracker src/dynamicTracker.cpp)
+add_dependencies(${PROJECT_NAME}_dynamicTracker ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
 target_link_libraries(${PROJECT_NAME}_dynamicTracker ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
+# Cylindrical monitored-object source (robot-following synthetic target)
+add_executable(${PROJECT_NAME}_cylinderObjectSource src/cylinderObjectSource.cpp)
+add_dependencies(${PROJECT_NAME}_cylinderObjectSource ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_cylinderObjectSource ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
+# Early warning evaluator (static clearance + dynamic trend fusion)
+add_executable(${PROJECT_NAME}_warningEvaluator src/warningEvaluator.cpp)
+add_dependencies(${PROJECT_NAME}_warningEvaluator ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_warningEvaluator ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
+# Warning-to-control command bridge (prototype control interface)
+add_executable(${PROJECT_NAME}_warningController src/warningController.cpp)
+add_dependencies(${PROJECT_NAME}_warningController ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_warningController ${catkin_LIBRARIES})

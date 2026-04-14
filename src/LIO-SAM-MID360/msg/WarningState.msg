@@ -1,0 +1,23 @@
+uint8 LEVEL_NONE=0
+uint8 LEVEL_NOTICE=1
+uint8 LEVEL_WARNING=2
+uint8 LEVEL_EMERGENCY=3
+
+Header header
+uint8 active_level
+uint8 desired_level
+string level_text
+string source
+string reason
+string monitored_class_name
+int32 monitored_class_id
+int32 dynamic_track_id
+float32 static_clearance
+float32 dynamic_clearance
+float32 relative_speed
+float32 ttc
+float32 predicted_clearance
+bool head_on
+bool system_ready
+geometry_msgs/Pose monitored_pose
+geometry_msgs/Vector3 monitored_velocity

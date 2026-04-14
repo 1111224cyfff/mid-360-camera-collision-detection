@@ -1,0 +1,51 @@
+warning_evaluator:
+  visual_objects_topic: /segment/object_states
+  cylinder_objects_topic: /warning/cylinder_object_states
+  monitored_source_mode: visual
+  dynamic_tracks_topic: /dynamic_tracker/track_states
+  static_cloud_topic: /lio_sam/mapping/map_local
+  warning_topic: /warning/state
+  marker_topic: /warning/markers
+  output_frame: map
+  cylinder_class_name: synthetic_cylinder
+  default_cylinder_radius: 2.0
+  default_cylinder_height: 3.0
+  cylinder_ground_contact_tolerance: 0.15
+  cylinder_judgment_z_offset_m: -5.0
+  ignore_dynamic_tracks_inside_cylinder: true
+  inside_cylinder_ignore_epsilon: 0.001
+  dynamic_prediction_sample_dt: 0.1
+
+  monitored_class_names: [crane, exca-arm, exca-body]
+
+  object_stale_timeout: 0.5
+  track_stale_timeout: 1.0
+  static_cloud_stale_timeout: 1.0
+  enable_static_warning: false
+  transform_timeout_sec: 0.05
+
+  min_object_confidence: 0.35
+  min_object_points: 25
+  allow_tentative_tracks: false
+  assumed_dynamic_track_radius: 0.4
+
+  prediction_horizon: 2.0
+  min_closing_speed: 0.05
+  head_on_closing_speed: 0.4
+  head_on_cosine_threshold: -0.2
+  object_velocity_alpha: 0.6
+  max_object_velocity_dt: 0.5
+  downgrade_hold_sec: 1.0
+  publish_markers: true
+
+  static_notice_clearance: 2.5
+  static_warning_clearance: 1.5
+  static_emergency_clearance: 0.8
+
+  dynamic_notice_clearance: 2.0
+  dynamic_warning_clearance: 1.2
+  dynamic_emergency_clearance: 0.6
+
+  notice_ttc: 3.0
+  warning_ttc: 2.0
+  emergency_ttc: 1.0

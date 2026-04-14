@@ -78,6 +78,7 @@ public:
     //Frames
     string lidarFrame;
     string baselinkFrame;
+    string trackingFrame;
     string odometryFrame;
     string mapFrame;
     bool publishImuBaselinkTf;
@@ -186,6 +187,9 @@ public:
 
         nh.param<std::string>("lio_sam/lidarFrame", lidarFrame, "base_link");
         nh.param<std::string>("lio_sam/baselinkFrame", baselinkFrame, "base_link");
+        nh.param<std::string>("lio_sam/trackingFrame", trackingFrame, "");
+        if (trackingFrame.empty())
+            trackingFrame = lidarFrame;
         nh.param<std::string>("lio_sam/odometryFrame", odometryFrame, "odom");
         nh.param<std::string>("lio_sam/mapFrame", mapFrame, "map");
         nh.param<bool>("lio_sam/publishImuBaselinkTf", publishImuBaselinkTf, false);

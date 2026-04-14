@@ -7,24 +7,36 @@
   <arg name="segment_rviz" default="true" />
   <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
+  <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
+  <arg name="leveler_calib_duration_sec" default="1.0" />
+  <arg name="leveler_min_imu_samples" default="200" />
+  <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
 
-  <!-- 现有坐标与投影链固定基于 body_leveled。 -->
+  <!-- body_leveled 用于传感器侧水平化；LIO-SAM 与下游保持原有 odom/map 世界系。 -->
   <arg name="odometry_frame" default="odom" />
   <arg name="world_frame" default="map" />
+  <arg name="enable_near_field_roi" default="true" />
+  <arg name="near_field_roi_output_topic" default="/perception/near_field_cloud_registered" />
+  <arg name="near_field_roi_frame" default="body_leveled" />
+  <arg name="near_field_roi_xy_radius" default="10.0" />
 
   <arg name="segment_raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
-  <arg name="segment_weight_name" default="yolo11s-seg.engine" />
-  <arg name="segment_launch_file" default="$(find yolo11_ros)/launch/segment.launch" />
-  <arg name="segment_projection_config_path" default="$(find yolo11_ros)/config/segment_projection.yaml" />
+  <arg name="segment_weight_name" default="yolo26s-seg.engine" />
+  <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
+  <arg name="segment_projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
   <arg name="segment_flip_lidar_y_for_projection" default="false" />
   <arg name="segment_use_tf_for_projection" default="true" />
   <arg name="segment_log_rotated_grid" default="false" />
-  <arg name="segment_sync_max_interval_sec" default="0.03" />
+  <arg name="segment_sync_max_interval_sec" default="0.05" />
   <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
   <arg name="segment_image_transport_in" default="compressed" />
+  <arg name="enable_warning_evaluator" default="true" />
+  <arg name="enable_warning_controller" default="true" />
+  <arg name="enable_cylinder_object_source" default="true" />
+  <arg name="warning_source_mode" default="visual" />
 
   <!-- 启动相机 tf 转换。body_leveled 由 leveler 在 rosbag 回放开始后约 1s 标定完成后发布。 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
@@ -35,7 +47,11 @@
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
 
   <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
-  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
+  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch">
+    <arg name="calib_duration_sec" value="$(arg leveler_calib_duration_sec)" />
+    <arg name="min_imu_samples" value="$(arg leveler_min_imu_samples)" />
+    <arg name="calib_max_gyro_norm_rad_s" value="$(arg leveler_calib_max_gyro_norm_rad_s)" />
+  </include>
 
   <!-- merged_livox 的原始输出 frame 是 body，这里显式声明 body 与 base_link 重合。 -->
   <node pkg="tf2_ros"
@@ -52,12 +68,31 @@
     <arg name="rviz_node_name" value="m_detector_rviz" />
     <arg name="odometry_frame" value="$(arg odometry_frame)" />
     <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="enable_near_field_roi" value="$(arg enable_near_field_roi)" />
+    <arg name="near_field_roi_output_topic" value="$(arg near_field_roi_output_topic)" />
+    <arg name="near_field_roi_frame" value="$(arg near_field_roi_frame)" />
+    <arg name="near_field_roi_xy_radius" value="$(arg near_field_roi_xy_radius)" />
   </include>
 
   <!-- 启动 dynamic tracker -->
   <include file="$(find lio_sam)/launch/dynamic_tracker.launch">
     <arg name="output_frame" value="$(arg world_frame)" />
   </include>
+
+  <group if="$(arg enable_warning_evaluator)">
+    <group if="$(arg enable_cylinder_object_source)">
+      <include file="$(find lio_sam)/launch/cylinder_object_source.launch" />
+    </group>
+
+    <include file="$(find lio_sam)/launch/warning_evaluator.launch">
+      <arg name="output_frame" value="$(arg world_frame)" />
+      <arg name="monitored_source_mode" value="$(arg warning_source_mode)" />
+    </include>
+  </group>
+
+  <group if="$(arg enable_warning_controller)">
+    <include file="$(find lio_sam)/launch/warning_controller.launch" />
+  </group>
 
   <!-- 将 leveled 压缩图像还原为 raw，供分割节点直接订阅。 -->
   <node pkg="image_transport"

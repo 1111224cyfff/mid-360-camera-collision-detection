@@ -1,5 +1,7 @@
 #include "chrono"
+#include <cmath>
 #include "opencv2/opencv.hpp"
+#include <lio_sam/SegmentedObjectStateArray.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
@@ -177,6 +179,82 @@ std::vector<SegmentObject> convertDetectionsToObjects(const std::vector<Detectio
         objects.push_back(std::move(obj));
     }
     return objects;
+}
+
+lio_sam::SegmentedObjectStateArray buildSegmentedObjectStateArray(
+    const std_msgs::Header& header,
+    const std::vector<SegmentObject>& objects,
+    const std::vector<std::vector<pcl::PointXYZI>>& object_clouds,
+    const std::vector<std::string>& class_names)
+{
+    lio_sam::SegmentedObjectStateArray out;
+    out.header = header;
+    const size_t object_count = std::min(objects.size(), object_clouds.size());
+    out.objects.reserve(object_count);
+
+    for (size_t index = 0; index < object_count; ++index) {
+        const auto& object = objects[index];
+        const auto& cloud = object_clouds[index];
+        if (cloud.empty()) {
+            continue;
+        }
+
+        double sum_x = 0.0;
+        double sum_y = 0.0;
+        double sum_z = 0.0;
+        double min_x = std::numeric_limits<double>::infinity();
+        double min_y = std::numeric_limits<double>::infinity();
+        double min_z = std::numeric_limits<double>::infinity();
+        double max_x = -std::numeric_limits<double>::infinity();
+        double max_y = -std::numeric_limits<double>::infinity();
+        double max_z = -std::numeric_limits<double>::infinity();
+        double nearest_range = std::numeric_limits<double>::infinity();
+
+        for (const auto& point : cloud) {
+            sum_x += point.x;
+            sum_y += point.y;
+            sum_z += point.z;
+            min_x = std::min(min_x, static_cast<double>(point.x));
+            min_y = std::min(min_y, static_cast<double>(point.y));
+            min_z = std::min(min_z, static_cast<double>(point.z));
+            max_x = std::max(max_x, static_cast<double>(point.x));
+            max_y = std::max(max_y, static_cast<double>(point.y));
+            max_z = std::max(max_z, static_cast<double>(point.z));
+            nearest_range = std::min(
+                nearest_range,
+                std::sqrt(
+                    static_cast<double>(point.x) * static_cast<double>(point.x)
+                    + static_cast<double>(point.y) * static_cast<double>(point.y)
+                    + static_cast<double>(point.z) * static_cast<double>(point.z)));
+        }
+
+        const double point_count = static_cast<double>(cloud.size());
+        const double size_x = std::max(0.0, max_x - min_x);
+        const double size_y = std::max(0.0, max_y - min_y);
+        const double size_z = std::max(0.0, max_z - min_z);
+
+        lio_sam::SegmentedObjectState state;
+        state.class_id = object.label;
+        if (object.label >= 0 && static_cast<size_t>(object.label) < class_names.size()) {
+            state.class_name = class_names[object.label];
+        } else {
+            state.class_name = "unknown";
+        }
+        state.confidence = object.prob;
+        state.pose.position.x = sum_x / point_count;
+        state.pose.position.y = sum_y / point_count;
+        state.pose.position.z = sum_z / point_count;
+        state.pose.orientation.w = 1.0;
+        state.size.x = size_x;
+        state.size.y = size_y;
+        state.size.z = size_z;
+        state.bounding_radius = 0.5 * std::sqrt(size_x * size_x + size_y * size_y + size_z * size_z);
+        state.nearest_range = nearest_range;
+        state.point_count = static_cast<uint32_t>(cloud.size());
+        out.objects.push_back(state);
+    }
+
+    return out;
 }
 
 std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
@@ -357,7 +435,8 @@ private:
     ros::Publisher pub_img_;
     ros::Publisher pub_img_pc_;
     ros::Publisher pub_color_cloud_;
-    std::string topic_img_, topic_res_img_, weight_name_, topic_pointcloud_, topic_res_img_pc_;
+    ros::Publisher pub_object_states_;
+    std::string topic_img_, topic_res_img_, weight_name_, topic_pointcloud_, topic_res_img_pc_, topic_object_states_;
     bool flip_lidar_y_for_projection_ = false;
     bool use_tf_for_projection_ = true;
     double tf_lookup_timeout_sec_ = 0.02;
@@ -616,6 +695,7 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
     ROS_DEBUG_THROTTLE(2.0, "Output Image Size: Width = %d, Height = %d", img_res_.cols, img_res_.rows);
     pub_img_pc_.publish(msg_img_new_pc);
     pub_img_.publish(msg_img_new);
+    pub_object_states_.publish(buildSegmentedObjectStateArray(current_cloud_header, objs_, pointcloud_vec, CLASS_NAMES));
 
     sensor_msgs::PointCloud2 output_cloud_msg;
     pcl::toROSMsg(*colored_cloud, output_cloud_msg);
@@ -643,6 +723,7 @@ RosNode::RosNode()
     n_.param<std::string>("topic_pointcloud", topic_pointcloud_, "/livox/lidar");
     n_.param<std::string>("topic_res_img", topic_res_img_, "/detect/image_raw");
     n_.param<std::string>("topic_res_img_pc_", topic_res_img_pc_, "/detect/topic_res_img_pc_");
+    n_.param<std::string>("topic_object_states", topic_object_states_, "/segment/object_states");
     n_.param<std::string>("weight_name", weight_name_, "yolo26s-seg.engine");
     n_.param<std::string>("projection_config_path", projection_config_path_, projection_config_path_);
     n_.param<bool>("flip_lidar_y_for_projection", flip_lidar_y_for_projection_, false);
@@ -677,6 +758,7 @@ RosNode::RosNode()
     pub_img_pc_ = n_.advertise<sensor_msgs::Image>(topic_res_img_pc_, 10);
     pub_img_ = n_.advertise<sensor_msgs::Image>(topic_res_img_, 10);
     pub_color_cloud_ = n_.advertise<sensor_msgs::PointCloud2>("/colored_point_cloud", 10);
+    pub_object_states_ = n_.advertise<lio_sam::SegmentedObjectStateArray>(topic_object_states_, 10);
 
     sub_img_.subscribe(n_, topic_img_, 10);
     sub_pc_.subscribe(n_, topic_pointcloud_, 10);

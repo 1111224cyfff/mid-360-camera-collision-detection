@@ -1,12 +1,20 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
-  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia_onlymanmove.bag" />
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section.bag" />
   <arg name="detector_rviz" default="true" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
-  <!-- 现有坐标与投影链固定基于 body_leveled。 -->
+  <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
+  <arg name="leveler_calib_duration_sec" default="1.0" />
+  <arg name="leveler_min_imu_samples" default="200" />
+  <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
+  <!-- body_leveled 仍是传感器侧水平化 frame；动态检测保持原有 odom/map 世界系。 -->
   <arg name="odometry_frame" default="odom" />
   <arg name="world_frame" default="map" />
+  <arg name="enable_near_field_roi" default="true" />
+  <arg name="near_field_roi_output_topic" default="/perception/near_field_cloud_registered" />
+  <arg name="near_field_roi_frame" default="body_leveled" />
+  <arg name="near_field_roi_xy_radius" default="10.0" />
 
   <!-- 启动 相机tf转换 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
@@ -18,7 +26,11 @@
   <include file="$(find livox_merge)/launch/livox_merge.launch" />
 
   <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
-  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch" />
+  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch">
+    <arg name="calib_duration_sec" value="$(arg leveler_calib_duration_sec)" />
+    <arg name="min_imu_samples" value="$(arg leveler_min_imu_samples)" />
+    <arg name="calib_max_gyro_norm_rad_s" value="$(arg leveler_calib_max_gyro_norm_rad_s)" />
+  </include>
 
     <!-- merged_livox 的原始输出 frame 是 body，这里显式声明 body 与 base_link 重合。 -->
     <node pkg="tf2_ros" type="static_transform_publisher" name="base_to_body_tf"
@@ -33,6 +45,10 @@
     <arg name="rviz_node_name" value="m_detector_rviz" />
     <arg name="odometry_frame" value="$(arg odometry_frame)" />
     <arg name="world_frame" value="$(arg world_frame)" />
+    <arg name="enable_near_field_roi" value="$(arg enable_near_field_roi)" />
+    <arg name="near_field_roi_output_topic" value="$(arg near_field_roi_output_topic)" />
+    <arg name="near_field_roi_frame" value="$(arg near_field_roi_frame)" />
+    <arg name="near_field_roi_xy_radius" value="$(arg near_field_roi_xy_radius)" />
   </include>
 
   <!-- 启动 dynamic tracker -->

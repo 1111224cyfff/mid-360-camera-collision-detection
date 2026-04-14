@@ -17,8 +17,11 @@
 
   <!-- Calibration window; keep the crane hook still during this period -->
   <!-- 启动阶段常有抖动/未静止：适当加长标定窗口可明显提升稳定性 -->
-  <arg name="calib_duration_sec" default="1.0" />
-  <arg name="min_imu_samples" default="200" />
+  <arg name="calib_duration_sec" default="2.0" />
+  <arg name="min_imu_samples" default="800" />
+  <arg name="calib_max_gyro_norm_rad_s" default="0.2" />
+  <arg name="calib_acc_norm_tolerance_ratio" default="0.15" />
+  <arg name="calib_acc_norm_gate_warmup_samples" default="50" />
 
   <!-- If false, leveled topics start only after calibration (recommended) -->
   <arg name="publish_before_calibrated" default="false" />
@@ -37,6 +40,9 @@
 
     <param name="calib_duration_sec" value="$(arg calib_duration_sec)" />
     <param name="min_imu_samples" value="$(arg min_imu_samples)" />
+    <param name="calib_max_gyro_norm_rad_s" value="$(arg calib_max_gyro_norm_rad_s)" />
+    <param name="calib_acc_norm_tolerance_ratio" value="$(arg calib_acc_norm_tolerance_ratio)" />
+    <param name="calib_acc_norm_gate_warmup_samples" value="$(arg calib_acc_norm_gate_warmup_samples)" />
 
     <param name="publish_before_calibrated" value="$(arg publish_before_calibrated)" />
     <param name="publish_level_tf" value="$(arg publish_level_tf)" />

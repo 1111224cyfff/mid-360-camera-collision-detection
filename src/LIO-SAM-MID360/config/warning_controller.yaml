@@ -1,0 +1,16 @@
+warning_controller:
+  warning_topic: /warning/state
+  command_topic: /warning/control_command
+  latch_output: true
+
+  warning_speed_limit_ratio: 0.35
+  hold_speed_limit_ratio: 0.0
+  emergency_speed_limit_ratio: 0.0
+  min_direction_speed: 0.08
+  reverse_escape_direction: true
+
+  require_operator_ack_for_warning: true
+  require_operator_ack_for_emergency: true
+
+  hold_on_static_warning: false
+  hold_on_combined_warning: false

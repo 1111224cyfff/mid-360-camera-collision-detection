@@ -12,6 +12,14 @@
 	<arg name="time_breakdown_file" default=""/>
 	<arg name="odometry_frame" default="odom"/>
 	<arg name="world_frame" default="map"/>
+	<arg name="registered_cloud_topic" default="/lio_sam/mapping/cloud_registered"/>
+	<arg name="enable_near_field_roi" default="false"/>
+	<arg name="near_field_roi_output_topic" default="/perception/near_field_cloud_registered"/>
+	<arg name="near_field_roi_frame" default="body_leveled"/>
+	<arg name="near_field_roi_xy_radius" default="10.0"/>
+	<arg name="near_field_roi_tf_wait_timeout" default="0.10"/>
+	<arg name="near_field_roi_fallback_to_latest_tf" default="true"/>
+	<arg name="near_field_roi_preserve_input_stamp" default="true"/>
 	<arg name="enable_pointcloud_bridge" default="true"/>
 	<arg name="bridge_input_topic" default="/m_detector/point_out"/>
 	<arg name="bridge_output_topic" default="/m_detector/point_out_map"/>
@@ -30,7 +38,21 @@
 	<arg name="dyn_cluster_max_size" default="50000"/>
 
 	<rosparam command="load" file="$(find m_detector)/config/mid360/mid360.yaml" />
-	<param name="dyn_obj/points_topic" type="string" value="/lio_sam/mapping/cloud_registered" />
+	<group if="$(arg enable_near_field_roi)">
+		<node pkg="m_detector" type="pointcloud_roi_filter" name="m_detector_near_field_roi_filter" output="screen">
+			<param name="input_topic" type="string" value="$(arg registered_cloud_topic)" />
+			<param name="output_topic" type="string" value="$(arg near_field_roi_output_topic)" />
+			<param name="crop_frame" type="string" value="$(arg near_field_roi_frame)" />
+			<param name="xy_radius" type="double" value="$(arg near_field_roi_xy_radius)" />
+			<param name="tf_wait_timeout" type="double" value="$(arg near_field_roi_tf_wait_timeout)" />
+			<param name="fallback_to_latest_tf" type="bool" value="$(arg near_field_roi_fallback_to_latest_tf)" />
+			<param name="preserve_input_stamp" type="bool" value="$(arg near_field_roi_preserve_input_stamp)" />
+		</node>
+		<param name="dyn_obj/points_topic" type="string" value="$(arg near_field_roi_output_topic)" />
+	</group>
+	<group unless="$(arg enable_near_field_roi)">
+		<param name="dyn_obj/points_topic" type="string" value="$(arg registered_cloud_topic)" />
+	</group>
 	<param name="dyn_obj/odom_topic" type="string" value="/lio_sam/mapping/odometry" />
 	<param name="dyn_obj/frame_id" type="string" value="$(arg odometry_frame)" />
 	<param name="dyn_obj/input_in_world_frame" type="bool" value="true" />

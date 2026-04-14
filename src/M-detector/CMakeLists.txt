@@ -88,20 +88,29 @@ catkin_package(
 
 
 add_executable(dynfilter src/dynfilter_with_odom.cpp src/DynObjFilter.cpp src/DynObjCluster.cpp)
+add_dependencies(dynfilter ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(dynfilter ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} ${OpenCV_LIBS} TBB::tbb)
 target_include_directories(dynfilter PRIVATE ${PYTHON_INCLUDE_DIRS})
 
 add_executable(display_prediction src/display_prediction.cpp )
+add_dependencies(display_prediction ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(display_prediction ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} ${OpenCV_LIBS} TBB::tbb)
 target_include_directories(display_prediction PRIVATE ${PYTHON_INCLUDE_DIRS})
 
 add_executable(pointcloud_tf_bridge src/pointcloud_tf_bridge.cpp)
+add_dependencies(pointcloud_tf_bridge ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(pointcloud_tf_bridge ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
+add_executable(pointcloud_roi_filter src/pointcloud_roi_filter.cpp)
+add_dependencies(pointcloud_roi_filter ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+target_link_libraries(pointcloud_roi_filter ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
 add_executable(dyn_cluster_node src/dyn_cluster_node.cpp)
+add_dependencies(dyn_cluster_node ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(dyn_cluster_node ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
 add_executable(cal_recall src/cal_recall_multi.cpp)
+add_dependencies(cal_recall ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
 target_link_libraries(cal_recall ${catkin_LIBRARIES} ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} ${OpenCV_LIBS} TBB::tbb)
 target_include_directories(cal_recall PRIVATE ${PYTHON_INCLUDE_DIRS})
 

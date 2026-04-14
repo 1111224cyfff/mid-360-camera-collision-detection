@@ -1,0 +1,20 @@
+cylinder_object_source:
+  input_cloud_topic: /merged_pointcloud_leveled
+  output_frame: map
+  output_topic: /warning/cylinder_object_states
+  marker_topic: /warning/cylinder_object_markers
+
+  object_class_name: synthetic_cylinder
+  object_class_id: -100
+
+  radius: 2.0
+  default_height: 3.0
+  min_height: 0.5
+  contact_percentile: 0.1
+  min_support_drop: 0.2
+  min_support_points: 30
+  transform_timeout_sec: 0.05
+
+  object_confidence: 1.0
+  fallback_confidence: 0.7
+  publish_markers: true

@@ -5,7 +5,7 @@
     <arg name="pointcloud_topic" default="/merged_pointcloud_leveled" />
     <arg name="segment_result_topic" default="/segment/image_raw" />
     <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
-    <arg name="weight_name" default="yolo26s-seg.engine" />
+    <arg name="weight_name" default="20260415.engine" />
     <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
     <arg name="projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
     <arg name="flip_lidar_y_for_projection" default="false" />
@@ -13,6 +13,7 @@
     <arg name="log_rotated_grid" default="false" />
     <arg name="enable_pointcloud_downsample" default="true" />
     <arg name="pointcloud_leaf_size_m" default="0.03" />
+    <arg name="object_radius_padding_m" default="0.12" />
     <!-- 动态场景里，图像与点云配对窗口过大时会造成明显投影漂移。 -->
     <arg name="sync_max_interval_sec" default="0.05" />
     <arg name="tf_lookup_timeout_sec" default="0.02" />
@@ -34,6 +35,7 @@
         <arg name="log_rotated_grid" value="$(arg log_rotated_grid)" />
         <arg name="enable_pointcloud_downsample" value="$(arg enable_pointcloud_downsample)" />
         <arg name="pointcloud_leaf_size_m" value="$(arg pointcloud_leaf_size_m)" />
+        <arg name="object_radius_padding_m" value="$(arg object_radius_padding_m)" />
         <arg name="sync_max_interval_sec" value="$(arg sync_max_interval_sec)" />
         <arg name="tf_lookup_timeout_sec" value="$(arg tf_lookup_timeout_sec)" />
     </include>

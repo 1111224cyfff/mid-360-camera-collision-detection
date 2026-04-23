@@ -9,6 +9,22 @@
 #include "cuda/preprocess.cuh"
 #include "cuda/decode.cuh"
 
+namespace {
+int64_t dimsNumel(const nvinfer1::Dims& dims)
+{
+	int64_t numel = 1;
+	for (int i = 0; i < dims.nbDims; ++i)
+	{
+		if (dims.d[i] <= 0)
+		{
+			return -1;
+		}
+		numel *= static_cast<int64_t>(dims.d[i]);
+	}
+	return numel;
+}
+}
+
 void YOLO_TensorRT_Segment::init(const Algo_Type algo_type, const Device_Type device_type, const Model_Type model_type, const std::string model_path)
 {
 	if (algo_type != YOLOv5 && algo_type != YOLOv8 && algo_type != YOLOv9 && algo_type != YOLOv11 && algo_type != YOLOv12 && algo_type != YOLO26)
@@ -34,13 +50,46 @@ void YOLO_TensorRT_Segment::init(const Algo_Type algo_type, const Device_Type de
 	cudaMalloc(&m_output1_device, sizeof(float) * m_output_numseg);
 
 #if NV_TENSORRT_MAJOR < 10
-	m_bindings[0] = m_input_device;
-	m_bindings[1] = m_output1_device;
-	m_bindings[2] = m_output0_device;
+	for (int i = 0; i < m_engine->getNbBindings(); ++i)
+	{
+		if (m_engine->bindingIsInput(i))
+		{
+			m_bindings[i] = m_input_device;
+			continue;
+		}
+
+		const nvinfer1::Dims dims = m_engine->getBindingDimensions(i);
+		const int64_t numel = dimsNumel(dims);
+		if (numel == m_output_numseg)
+		{
+			m_bindings[i] = m_output1_device;
+		}
+		else
+		{
+			m_bindings[i] = m_output0_device;
+		}
+	}
 #else
-	m_bindings[0] = m_input_device;
-	m_bindings[1] = m_output0_device;
-	m_bindings[2] = m_output1_device;
+	for (int i = 0; i < m_engine->num_io_tensors; ++i)
+	{
+		const char* tensor_name = m_engine->get_tensor_name(i);
+		if (m_engine->get_tensor_mode(tensor_name) == nvinfer1::TensorIOMode::kINPUT)
+		{
+			m_bindings[i] = m_input_device;
+			continue;
+		}
+
+		const nvinfer1::Dims dims = m_engine->get_tensor_shape(tensor_name);
+		const int64_t numel = dimsNumel(dims);
+		if (numel == m_output_numseg)
+		{
+			m_bindings[i] = m_output1_device;
+		}
+		else
+		{
+			m_bindings[i] = m_output0_device;
+		}
+	}
 #endif 
 
 #ifdef _CUDA_PREPROCESS

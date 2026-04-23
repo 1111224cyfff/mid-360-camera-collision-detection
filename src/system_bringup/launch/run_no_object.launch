@@ -1,20 +1,22 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
-  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section.bag" />
-
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia_2.bag" />
+  
+  <arg name="livox_merge_rviz" default="true" />
   <arg name="detector_rviz" default="false" />
   <arg name="lio_sam_rviz" default="false" />
-  <arg name="enable_segment" default="true" />
+  <arg name="enable_segment" default="false" />
   <arg name="segment_rviz" default="true" />
   <arg name="launch_rviz" default="$(arg segment_rviz)" />
-  <arg name="livox_merge_rviz" default="false" />
   <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
   <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
   <arg name="leveler_calib_duration_sec" default="1.0" />
   <arg name="leveler_min_imu_samples" default="200" />
   <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
+  <!-- m_detector 订阅 /lio_sam/mapping/cloud_registered；这里显式把 mapping 节流调到 10Hz。 -->
+  <arg name="lio_sam_mapping_process_interval" default="0.1" />
 
   <!-- body_leveled 用于传感器侧水平化；LIO-SAM 与下游保持原有 odom/map 世界系。 -->
   <arg name="odometry_frame" default="odom" />
@@ -24,11 +26,12 @@
   <arg name="near_field_roi_frame" default="body_leveled" />
   <arg name="near_field_roi_xy_radius" default="10.0" />
 
+  <arg name="camera_raw_image_topic" default="/hikrobot_camera/rgb" />
   <arg name="segment_raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
-  <arg name="segment_weight_name" default="20260415.engine" />
+  <arg name="segment_weight_name" default="20260420.engine" />
   <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
   <arg name="segment_projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
   <arg name="segment_flip_lidar_y_for_projection" default="false" />
@@ -36,17 +39,25 @@
   <arg name="segment_log_rotated_grid" default="false" />
   <arg name="segment_sync_max_interval_sec" default="0.05" />
   <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
-  <arg name="segment_object_radius_padding_m" default="0.12" />
-  <arg name="segment_image_transport_in" default="compressed" />
+  <arg name="segment_object_radius_padding_m" default="0.2" />
   <arg name="enable_warning_evaluator" default="true" />
   <arg name="enable_warning_controller" default="true" />
   <arg name="enable_cylinder_object_source" default="true" />
-  <!-- 只保留圆柱动态预警；关闭 visual 静态距离预警。 -->
+  <!-- 关闭视觉投影时，可用固定锚点圆柱替代视觉锚点；偏移量按 world_frame 坐标轴应用。默认配置表示“机器人在 map 中的位置向下 3m”。 -->
+  <arg name="cylinder_use_fixed_anchor" default="true" />
+  <arg name="cylinder_fixed_anchor_frame" default="base_link" />
+  <arg name="cylinder_fixed_anchor_x" default="0.0" />
+  <arg name="cylinder_fixed_anchor_y" default="0.0" />
+  <arg name="cylinder_fixed_anchor_z" default="-5.0" />
+  <!-- 同时启用 visual 静态距离预警和圆柱动态预警。 -->
   <arg name="warning_source_mode" default="cylinder" />
   <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
 
-  <!-- 启动相机 tf 转换。body_leveled 由 leveler 在 rosbag 回放开始后约 1s 标定完成后发布。 -->
+  <!-- 启动相机 tf 转换。raw 图像直接进入后续链路，不再经过压缩/解压重发。 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
+    <arg name="input_topic" value="$(arg camera_raw_image_topic)" />
+    <arg name="output_topic" value="$(arg segment_raw_image_topic)" />
+    <arg name="use_compressed_image" value="false" />
     <arg name="launch_prefix" value="bash -c 'sleep $(arg camera_frame_transform_delay_sec); exec $0 $@'" />
   </include>
 
@@ -71,6 +82,10 @@
   <!-- 启动 LIO-SAM (6-axis) -->
   <include file="$(find lio_sam)/launch/run6axis.launch">
     <arg name="launch_rviz" value="$(arg lio_sam_rviz)" />
+    <arg name="mapping_process_interval" value="$(arg lio_sam_mapping_process_interval)" />
+    <!-- 对照远端基线：no_object 启动不走本地新增的 selected-object map 过滤链，避免建图参考被误删。 -->
+    <arg name="selected_object_map_filter_enabled" value="false" />
+    <!-- 对照远端基线：关闭本地 6 轴 IMU 加速度姿态覆盖，避免 roll/pitch 初值在回放起步时被瞬时重写。 -->
     <arg name="use_accel_tilt_for_6axis" value="false" />
   </include>
 
@@ -92,13 +107,21 @@
   </include>
 
   <group if="$(arg enable_warning_evaluator)">
-    <include file="$(find lio_sam)/launch/visual_object_selector.launch">
-      <arg name="output_topic" value="$(arg selected_visual_objects_topic)" />
-    </include>
+    <group if="$(arg enable_segment)">
+      <include file="$(find lio_sam)/launch/visual_object_selector.launch">
+        <arg name="output_topic" value="$(arg selected_visual_objects_topic)" />
+      </include>
 
-    <group if="$(arg enable_cylinder_object_source)">
+    </group>
+
+    <group if="$(eval arg('enable_cylinder_object_source') and (arg('enable_segment') or arg('cylinder_use_fixed_anchor')))">
       <include file="$(find lio_sam)/launch/cylinder_object_source.launch">
         <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+        <arg name="use_fixed_anchor" value="$(arg cylinder_use_fixed_anchor)" />
+        <arg name="fixed_anchor_frame" value="$(arg cylinder_fixed_anchor_frame)" />
+        <arg name="fixed_anchor_x" value="$(arg cylinder_fixed_anchor_x)" />
+        <arg name="fixed_anchor_y" value="$(arg cylinder_fixed_anchor_y)" />
+        <arg name="fixed_anchor_z" value="$(arg cylinder_fixed_anchor_z)" />
       </include>
     </group>
 
@@ -113,17 +136,11 @@
     <include file="$(find lio_sam)/launch/warning_controller.launch" />
   </group>
 
-  <!-- 将 leveled 压缩图像还原为 raw，供分割节点直接订阅。 -->
   <group if="$(arg enable_segment)">
-    <node pkg="image_transport"
-          type="republish"
-          name="image_republish_leveled"
-          args="$(arg segment_image_transport_in) in:=$(arg segment_raw_image_topic) raw out:=$(arg segment_raw_image_topic)"
-          output="screen" />
-
-    <!-- 启动图像-点云分割投影。 -->
+    <!-- 启动图像-点云分割投影，直接订阅 leveled raw 图像。 -->
     <include file="$(arg segment_launch_file)">
       <arg name="topic_img" value="$(arg segment_raw_image_topic)" />
+      <arg name="use_compressed_image" value="false" />
       <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
       <arg name="topic_res_img" value="$(arg segment_result_topic)" />
       <arg name="topic_res_img_pc" value="$(arg segment_result_pc_topic)" />

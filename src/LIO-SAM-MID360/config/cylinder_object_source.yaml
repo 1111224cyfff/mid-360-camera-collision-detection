@@ -1,20 +1,28 @@
 cylinder_object_source:
   input_cloud_topic: /merged_pointcloud_leveled
+  visual_objects_topic: /segment/object_states
+  use_fixed_anchor: false
+  fixed_anchor_frame: base_link
+  fixed_anchor_x: 0.0
+  fixed_anchor_y: 0.0
+  fixed_anchor_z: -3.0
   output_frame: map
   output_topic: /warning/cylinder_object_states
   marker_topic: /warning/cylinder_object_markers
 
   object_class_name: synthetic_cylinder
   object_class_id: -100
+  anchor_class_names: [tower_crane_section, barrier]
 
   radius: 2.0
-  default_height: 3.0
   min_height: 0.5
+  visual_object_timeout_sec: 1.0
   contact_percentile: 0.1
   min_support_drop: 0.2
-  min_support_points: 30
   transform_timeout_sec: 0.05
+  min_object_confidence: 0.35
+  min_object_points: 25
 
   object_confidence: 1.0
-  fallback_confidence: 0.7
   publish_markers: true
+  marker_lifetime_sec: 0.0

@@ -25,8 +25,11 @@
 #include <condition_variable>
 
 #include <ros/ros.h>
+#include <geometry_msgs/TransformStamped.h>
 #include <sensor_msgs/PointCloud2.h>
+#include <sensor_msgs/point_cloud2_iterator.h>
 #include <sensor_msgs/Imu.h>
+#include <tf2_ros/static_transform_broadcaster.h>
 #include <livox_ros_driver2/CustomMsg.h>
 
 #include <Eigen/Dense>
@@ -152,6 +155,9 @@ private:
     ros::Publisher merged_livox_pub; // 新增：发布Livox CustomMsg格式的合并点云
     ros::Publisher merged_imu_pub;   // 修改：发布所有转换后的IMU数据（按时间顺序）
     ros::Publisher merged_pc_sliced_pub; // 新增：发布高度截取后的点云
+    ros::Publisher merged_pc_leveled_pub;
+    ros::Publisher merged_livox_leveled_pub;
+    ros::Publisher merged_imu_leveled_pub;
 
     // Lidar extrinsics
     deque<Matrix3d> R_B_L;
@@ -177,6 +183,32 @@ private:
     // 高度截取参数
     double slice_z_min = -2.0;  // 默认最小高度
     double slice_z_max = 2.0;   // 默认最大高度
+    bool publish_sliced_pointcloud_ = true;
+
+    bool enable_integrated_leveler_ = false;
+    std::string leveler_cloud_output_topic_ = "/merged_pointcloud_leveled";
+    std::string leveler_livox_output_topic_ = "/merged_livox_leveled";
+    std::string leveler_imu_output_topic_ = "/merged_imu_leveled";
+    std::string leveler_source_frame_id_ = "body";
+    std::string leveler_output_frame_id_ = "body_leveled";
+    double leveler_calib_duration_sec_ = 2.0;
+    int leveler_min_imu_samples_ = 800;
+    double leveler_calib_max_gyro_norm_rad_s_ = 0.2;
+    double leveler_calib_acc_norm_tolerance_ratio_ = 0.15;
+    int leveler_calib_acc_norm_gate_warmup_samples_ = 50;
+    bool leveler_publish_before_calibrated_ = false;
+    bool leveler_publish_level_tf_ = true;
+    bool leveler_calibrated_ = false;
+    bool leveler_level_tf_published_ = false;
+    ros::Time leveler_first_imu_stamp_;
+    int leveler_imu_samples_ = 0;
+    int leveler_rejected_imu_samples_ = 0;
+    Vector3d leveler_acc_sum_{0.0, 0.0, 0.0};
+    double leveler_acc_norm_sum_ = 0.0;
+    Vector3d leveler_target_up_{0.0, 0.0, 1.0};
+    Matrix3d leveler_R_level_{Matrix3d::Identity()};
+    Quaterniond leveler_q_level_{Quaterniond::Identity()};
+    tf2_ros::StaticTransformBroadcaster leveler_static_tf_broadcaster_;
     
     // 实时性能监控
     double last_sync_time = 0;
@@ -493,11 +525,34 @@ public:
         merged_pc_pub = nh_ptr->advertise<sensor_msgs::PointCloud2>("/merged_pointcloud", 1000);
         merged_livox_pub = nh_ptr->advertise<livox_ros_driver2::CustomMsg>("/merged_livox", 1000);
         merged_imu_pub = nh_ptr->advertise<sensor_msgs::Imu>("/merged_imu", 1000);
-        merged_pc_sliced_pub = nh_ptr->advertise<sensor_msgs::PointCloud2>("/merged_pointcloud_sliced", 1000);
 
         // 读取高度截取参数
         nh_ptr->param("slice_z_min", slice_z_min, -2.0);
         nh_ptr->param("slice_z_max", slice_z_max, 2.0);
+        nh_ptr->param("publish_sliced_pointcloud", publish_sliced_pointcloud_, true);
+        if (publish_sliced_pointcloud_)
+            merged_pc_sliced_pub = nh_ptr->advertise<sensor_msgs::PointCloud2>("/merged_pointcloud_sliced", 1000);
+
+        nh_ptr->param("enable_integrated_leveler", enable_integrated_leveler_, false);
+        nh_ptr->param("leveler_output_topic", leveler_cloud_output_topic_, std::string("/merged_pointcloud_leveled"));
+        nh_ptr->param("leveler_livox_custom_output_topic", leveler_livox_output_topic_, std::string("/merged_livox_leveled"));
+        nh_ptr->param("leveler_imu_output_topic", leveler_imu_output_topic_, std::string("/merged_imu_leveled"));
+        nh_ptr->param("leveler_source_frame_id", leveler_source_frame_id_, std::string("body"));
+        nh_ptr->param("leveler_output_frame_id", leveler_output_frame_id_, std::string("body_leveled"));
+        nh_ptr->param("leveler_calib_duration_sec", leveler_calib_duration_sec_, 2.0);
+        nh_ptr->param("leveler_min_imu_samples", leveler_min_imu_samples_, 800);
+        nh_ptr->param("leveler_calib_max_gyro_norm_rad_s", leveler_calib_max_gyro_norm_rad_s_, 0.2);
+        nh_ptr->param("leveler_calib_acc_norm_tolerance_ratio", leveler_calib_acc_norm_tolerance_ratio_, 0.15);
+        nh_ptr->param("leveler_calib_acc_norm_gate_warmup_samples", leveler_calib_acc_norm_gate_warmup_samples_, 50);
+        nh_ptr->param("leveler_publish_before_calibrated", leveler_publish_before_calibrated_, false);
+        nh_ptr->param("leveler_publish_level_tf", leveler_publish_level_tf_, true);
+
+        if (enable_integrated_leveler_)
+        {
+            merged_pc_leveled_pub = nh_ptr->advertise<sensor_msgs::PointCloud2>(leveler_cloud_output_topic_, 50);
+            merged_livox_leveled_pub = nh_ptr->advertise<livox_ros_driver2::CustomMsg>(leveler_livox_output_topic_, 200);
+            merged_imu_leveled_pub = nh_ptr->advertise<sensor_msgs::Imu>(leveler_imu_output_topic_, 4000);
+        }
 
         printf("Initialized MergeLidar with %d lidars\n", Nlidar);
         printf("Target sync frequency: %.1f Hz\n", sync_frequency);
@@ -505,7 +560,18 @@ public:
         printf("Max IMU buffer size per sensor: %zu samples\n", max_imu_buffer_size_);
         printf("Publishing merged PointCloud2 to: /merged_pointcloud\n");
         printf("Publishing merged Livox CustomMsg to: /merged_livox\n");
-        printf("Publishing height-sliced PointCloud2 to: /merged_pointcloud_sliced\n");
+        if (publish_sliced_pointcloud_)
+            printf("Publishing height-sliced PointCloud2 to: /merged_pointcloud_sliced\n");
+        else
+            printf("Height-sliced PointCloud2 publishing disabled by param: publish_sliced_pointcloud=false\n");
+        if (enable_integrated_leveler_)
+        {
+            printf("Integrated leveler enabled inside merge_lidar_node\n");
+            printf("Publishing leveled PointCloud2 to: %s\n", leveler_cloud_output_topic_.c_str());
+            printf("Publishing leveled Livox CustomMsg to: %s\n", leveler_livox_output_topic_.c_str());
+            printf("Publishing leveled IMU to: %s\n", leveler_imu_output_topic_.c_str());
+            printf("Integrated leveler frame mapping: %s -> %s\n", leveler_source_frame_id_.c_str(), leveler_output_frame_id_.c_str());
+        }
         printf("Height slice range: %.2f to %.2f meters\n", slice_z_min, slice_z_max);
         printf("Publishing time-sorted IMU data to: /merged_imu\n");
 
@@ -895,20 +961,25 @@ public:
                 publishCloud(merged_pc_pub, *extracted_points.cloud, stamp_time, frame_id);
                 
                 // 发布高度截取后的PointCloud2格式
-                publishSlicedCloud(merged_pc_sliced_pub, *extracted_points.cloud, stamp_time, frame_id, slice_z_min, slice_z_max);
+                if (publish_sliced_pointcloud_)
+                    publishSlicedCloud(merged_pc_sliced_pub, *extracted_points.cloud, stamp_time, frame_id, slice_z_min, slice_z_max);
                 
                 // 发布Livox CustomMsg格式
                 publishLivoxCloud(merged_livox_pub, *extracted_points.cloud, stamp_time, frame_id);
                 
                 // 提取并按时间顺序发布所有IMU数据
                 PublishTimeSortedImu(extracted_points.startTime, extracted_points.endTime);
+
+                if (enable_integrated_leveler_)
+                    publishIntegratedLeveledOutputs(*extracted_points.cloud, stamp_time, frame_id);
                 
                 // 输出融合后的点云信息
                 if(sync_count % 50 == 0) // 每50次输出一次
                 {
-                    printf("Merged cloud: %zu points, time span: %.3fms (Published as PointCloud2, Livox CustomMsg, and time-sorted IMU)\n", 
+                    printf("Merged cloud: %zu points, time span: %.3fms (Published as PointCloud2, Livox CustomMsg, and time-sorted IMU%s)\n", 
                            extracted_points.cloud->size(), 
-                           (extracted_points.endTime - extracted_points.startTime) * 1000);
+                           (extracted_points.endTime - extracted_points.startTime) * 1000,
+                           enable_integrated_leveler_ ? ", plus integrated leveled outputs" : "");
                 }
             }
             
@@ -1055,17 +1126,274 @@ public:
             *extracted_points.cloud += *extracted_clouds[i];
     }
 
-    void publishCloud(ros::Publisher &pub, CloudOuster &cloud, ros::Time thisStamp, std::string thisFrame)
+    void rememberLevelerSourceFrame(const std::string &frame_id)
     {
+        if (!frame_id.empty())
+            leveler_source_frame_id_ = frame_id;
+    }
+
+    std::string resolveLevelerOutputFrameId(const std::string &fallback_frame_id) const
+    {
+        if (!leveler_output_frame_id_.empty())
+            return leveler_output_frame_id_;
+        if (!leveler_source_frame_id_.empty())
+            return leveler_source_frame_id_;
+        return fallback_frame_id;
+    }
+
+    void publishIntegratedLevelTransformOnce()
+    {
+        if (!leveler_publish_level_tf_ || leveler_level_tf_published_)
+            return;
+
+        if (leveler_source_frame_id_.empty())
+        {
+            ROS_WARN("[livox_merge] leveler_source_frame_id is empty; skip publishing integrated level TF");
+            return;
+        }
+
+        if (leveler_output_frame_id_.empty() || leveler_output_frame_id_ == leveler_source_frame_id_)
+        {
+            leveler_level_tf_published_ = true;
+            return;
+        }
+
+        geometry_msgs::TransformStamped tf_msg;
+        tf_msg.header.stamp = ros::Time::now();
+        tf_msg.header.frame_id = leveler_source_frame_id_;
+        tf_msg.child_frame_id = leveler_output_frame_id_;
+        tf_msg.transform.translation.x = 0.0;
+        tf_msg.transform.translation.y = 0.0;
+        tf_msg.transform.translation.z = 0.0;
+        const Quaterniond q_source_from_output = leveler_q_level_.conjugate();
+        tf_msg.transform.rotation.x = q_source_from_output.x();
+        tf_msg.transform.rotation.y = q_source_from_output.y();
+        tf_msg.transform.rotation.z = q_source_from_output.z();
+        tf_msg.transform.rotation.w = q_source_from_output.w();
+        leveler_static_tf_broadcaster_.sendTransform(tf_msg);
+        leveler_level_tf_published_ = true;
+
+        ROS_INFO_STREAM("[livox_merge] Published integrated level TF " << tf_msg.header.frame_id << " -> "
+                                                                        << tf_msg.child_frame_id);
+    }
+
+    bool shouldPublishIntegratedLevelerOutputs() const
+    {
+        return leveler_calibrated_ || leveler_publish_before_calibrated_;
+    }
+
+    void updateIntegratedLevelerCalibration(const sensor_msgs::Imu &msg)
+    {
+        if (leveler_calibrated_)
+            return;
+
+        rememberLevelerSourceFrame(msg.header.frame_id);
+
+        const Vector3d acc(msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z);
+        const Vector3d gyr(msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z);
+        if (!acc.allFinite())
+            return;
+
+        const double acc_norm = acc.norm();
+        if (acc_norm < 1e-6)
+            return;
+
+        const double gyr_norm = gyr.allFinite() ? gyr.norm() : 0.0;
+        bool accept_sample = true;
+        if (leveler_calib_max_gyro_norm_rad_s_ > 0.0 && gyr_norm > leveler_calib_max_gyro_norm_rad_s_)
+        {
+            accept_sample = false;
+            ++leveler_rejected_imu_samples_;
+            ROS_WARN_THROTTLE(2.0,
+                              "[livox_merge] Rejecting integrated leveler IMU sample due to gyro motion: norm=%.4f rad/s > %.4f rad/s",
+                              gyr_norm,
+                              leveler_calib_max_gyro_norm_rad_s_);
+        }
+
+        if (accept_sample
+            && leveler_calib_acc_norm_tolerance_ratio_ > 0.0
+            && leveler_imu_samples_ >= leveler_calib_acc_norm_gate_warmup_samples_)
+        {
+            const double mean_acc_norm = leveler_acc_norm_sum_ / static_cast<double>(leveler_imu_samples_);
+            const double rel_error = std::abs(acc_norm - mean_acc_norm) / std::max(mean_acc_norm, 1e-6);
+            if (rel_error > leveler_calib_acc_norm_tolerance_ratio_)
+            {
+                accept_sample = false;
+                ++leveler_rejected_imu_samples_;
+                ROS_WARN_THROTTLE(2.0,
+                                  "[livox_merge] Rejecting integrated leveler IMU sample due to accel-norm deviation: norm=%.4f mean=%.4f rel=%.4f > %.4f",
+                                  acc_norm,
+                                  mean_acc_norm,
+                                  rel_error,
+                                  leveler_calib_acc_norm_tolerance_ratio_);
+            }
+        }
+
+        if (!accept_sample)
+        {
+            if (!leveler_publish_before_calibrated_)
+                return;
+        }
+
+        if (leveler_imu_samples_ == 0)
+            leveler_first_imu_stamp_ = msg.header.stamp;
+
+        if (accept_sample)
+        {
+            leveler_acc_sum_ += acc;
+            leveler_acc_norm_sum_ += acc_norm;
+            ++leveler_imu_samples_;
+        }
+
+        const double elapsed = (msg.header.stamp - leveler_first_imu_stamp_).toSec();
+        if (leveler_imu_samples_ >= leveler_min_imu_samples_ && elapsed >= leveler_calib_duration_sec_)
+        {
+            Vector3d avg = leveler_acc_sum_ / static_cast<double>(leveler_imu_samples_);
+            const double norm = avg.norm();
+            if (norm < 1e-6)
+            {
+                ROS_WARN("[livox_merge] Integrated leveler IMU accel average norm too small; cannot calibrate.");
+                return;
+            }
+
+            Vector3d up = avg / norm;
+            Quaterniond q;
+            q.setFromTwoVectors(up, leveler_target_up_);
+            leveler_R_level_ = q.normalized().toRotationMatrix();
+            leveler_q_level_ = Quaterniond(leveler_R_level_).normalized();
+            leveler_calibrated_ = true;
+            publishIntegratedLevelTransformOnce();
+
+            ROS_INFO_STREAM("[livox_merge] Integrated leveler calibrated using " << leveler_imu_samples_
+                            << " IMU samples over " << elapsed << " sec, rejected_samples=" << leveler_rejected_imu_samples_);
+            ROS_INFO_STREAM("[livox_merge] Integrated leveler avg_accel=" << avg.transpose() << ", up=" << up.transpose());
+            ROS_INFO_STREAM("[livox_merge] Integrated leveler q_level (x y z w)= " << leveler_q_level_.x() << " "
+                            << leveler_q_level_.y() << " " << leveler_q_level_.z() << " " << leveler_q_level_.w());
+        }
+    }
+
+    sensor_msgs::Imu makeIntegratedLeveledImu(const sensor_msgs::Imu &msg) const
+    {
+        sensor_msgs::Imu out = msg;
+        out.header.frame_id = leveler_calibrated_ ? resolveLevelerOutputFrameId(msg.header.frame_id) : msg.header.frame_id;
+        if (!leveler_calibrated_)
+            return out;
+
+        const Vector3d acc_in(msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z);
+        const Vector3d gyr_in(msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z);
+        const Vector3d acc_out = leveler_R_level_ * acc_in;
+        const Vector3d gyr_out = leveler_R_level_ * gyr_in;
+
+        out.linear_acceleration.x = acc_out.x();
+        out.linear_acceleration.y = acc_out.y();
+        out.linear_acceleration.z = acc_out.z();
+        out.angular_velocity.x = gyr_out.x();
+        out.angular_velocity.y = gyr_out.y();
+        out.angular_velocity.z = gyr_out.z();
+
+        const Quaterniond q_in(msg.orientation.w, msg.orientation.x, msg.orientation.y, msg.orientation.z);
+        if (std::abs(q_in.norm() - 1.0) < 0.5)
+        {
+            const Quaterniond q_out = (leveler_q_level_ * q_in).normalized();
+            out.orientation.w = q_out.w();
+            out.orientation.x = q_out.x();
+            out.orientation.y = q_out.y();
+            out.orientation.z = q_out.z();
+        }
+
+        return out;
+    }
+
+    void publishIntegratedLeveledImu(const sensor_msgs::Imu &msg)
+    {
+        if (!enable_integrated_leveler_)
+            return;
+
+        updateIntegratedLevelerCalibration(msg);
+        if (!shouldPublishIntegratedLevelerOutputs())
+            return;
+
+        if (merged_imu_leveled_pub.getNumSubscribers() == 0)
+            return;
+
+        merged_imu_leveled_pub.publish(makeIntegratedLeveledImu(msg));
+    }
+
+    void publishIntegratedLeveledOutputs(const CloudOuster &cloud, ros::Time thisStamp, const std::string &source_frame)
+    {
+        if (!enable_integrated_leveler_)
+            return;
+
+        rememberLevelerSourceFrame(source_frame);
+        if (!shouldPublishIntegratedLevelerOutputs())
+            return;
+
+        const Matrix3d *rotation = leveler_calibrated_ ? &leveler_R_level_ : nullptr;
+        const std::string output_frame = leveler_calibrated_ ? resolveLevelerOutputFrameId(source_frame) : source_frame;
+
+        if (merged_pc_leveled_pub.getNumSubscribers() > 0)
+        {
+            sensor_msgs::PointCloud2 cloud_msg;
+            fillPointCloud2XYZI(cloud, thisStamp, output_frame, cloud_msg, rotation);
+            merged_pc_leveled_pub.publish(cloud_msg);
+        }
+
+        if (merged_livox_leveled_pub.getNumSubscribers() > 0)
+        {
+            publishLivoxCloud(merged_livox_leveled_pub, cloud, thisStamp, output_frame, rotation);
+        }
+    }
+
+    void fillPointCloud2XYZI(const CloudOuster &cloud, ros::Time thisStamp, const std::string &thisFrame, sensor_msgs::PointCloud2 &cloud_msg, const Matrix3d *rotation = nullptr)
+    {
+        sensor_msgs::PointCloud2Modifier modifier(cloud_msg);
+        modifier.setPointCloud2Fields(4,
+                                      "x", 1, sensor_msgs::PointField::FLOAT32,
+                                      "y", 1, sensor_msgs::PointField::FLOAT32,
+                                      "z", 1, sensor_msgs::PointField::FLOAT32,
+                                      "intensity", 1, sensor_msgs::PointField::FLOAT32);
+        modifier.resize(cloud.size());
+
+        cloud_msg.header.stamp = thisStamp;
+        cloud_msg.header.frame_id = thisFrame;
+        cloud_msg.is_dense = false;
+
+        sensor_msgs::PointCloud2Iterator<float> it_x(cloud_msg, "x");
+        sensor_msgs::PointCloud2Iterator<float> it_y(cloud_msg, "y");
+        sensor_msgs::PointCloud2Iterator<float> it_z(cloud_msg, "z");
+        sensor_msgs::PointCloud2Iterator<float> it_intensity(cloud_msg, "intensity");
+
+        for (const auto &point : cloud.points)
+        {
+            Vector3d p(point.x, point.y, point.z);
+            if (rotation)
+                p = (*rotation) * p;
+            *it_x = static_cast<float>(p.x());
+            *it_y = static_cast<float>(p.y());
+            *it_z = static_cast<float>(p.z());
+            *it_intensity = point.intensity;
+            ++it_x;
+            ++it_y;
+            ++it_z;
+            ++it_intensity;
+        }
+    }
+
+    void publishCloud(ros::Publisher &pub, const CloudOuster &cloud, ros::Time thisStamp, const std::string &thisFrame)
+    {
+        if (pub.getNumSubscribers() == 0)
+            return;
+
         sensor_msgs::PointCloud2 cloud_;
-        pcl::toROSMsg(cloud, cloud_);
-        cloud_.header.stamp = thisStamp;
-        cloud_.header.frame_id = thisFrame;
+        fillPointCloud2XYZI(cloud, thisStamp, thisFrame, cloud_);
         pub.publish(cloud_);
     }
 
-    void publishSlicedCloud(ros::Publisher &pub, CloudOuster &cloud, ros::Time thisStamp, std::string thisFrame, double z_min, double z_max)
+    void publishSlicedCloud(ros::Publisher &pub, const CloudOuster &cloud, ros::Time thisStamp, const std::string &thisFrame, double z_min, double z_max)
     {
+        if (pub.getNumSubscribers() == 0)
+            return;
+
         CloudOuster sliced_cloud;
         sliced_cloud.reserve(cloud.size());
         
@@ -1078,14 +1406,15 @@ public:
         }
         
         sensor_msgs::PointCloud2 cloud_;
-        pcl::toROSMsg(sliced_cloud, cloud_);
-        cloud_.header.stamp = thisStamp;
-        cloud_.header.frame_id = thisFrame;
+        fillPointCloud2XYZI(sliced_cloud, thisStamp, thisFrame, cloud_);
         pub.publish(cloud_);
     }
 
-    void publishLivoxCloud(ros::Publisher &pub, CloudOuster &cloud, ros::Time thisStamp, std::string thisFrame)
+    void publishLivoxCloud(ros::Publisher &pub, const CloudOuster &cloud, ros::Time thisStamp, const std::string &thisFrame, const Matrix3d *rotation = nullptr)
     {
+        if (pub.getNumSubscribers() == 0)
+            return;
+
         livox_ros_driver2::CustomMsg livox_msg;
         
         // 设置消息头
@@ -1103,11 +1432,14 @@ public:
         {
             const PointOuster &ouster_point = cloud.points[i];
             livox_ros_driver2::CustomPoint &livox_point = livox_msg.points[i];
+            Vector3d p(ouster_point.x, ouster_point.y, ouster_point.z);
+            if (rotation)
+                p = (*rotation) * p;
             
             // 基本坐标
-            livox_point.x = ouster_point.x;
-            livox_point.y = ouster_point.y;
-            livox_point.z = ouster_point.z;
+            livox_point.x = static_cast<float>(p.x());
+            livox_point.y = static_cast<float>(p.y());
+            livox_point.z = static_cast<float>(p.z());
             
             // 反射率
             livox_point.reflectivity = ouster_point.reflectivity;
@@ -1217,6 +1549,7 @@ public:
             fused.orientation.y = q_avg.y();
             fused.orientation.z = q_avg.z();
             merged_imu_pub.publish(fused);
+            publishIntegratedLeveledImu(fused);
             last_pub_global_imu_ = fused_stamp;
         }
         else
@@ -1238,6 +1571,7 @@ public:
                 imu_msg.header.stamp = ros::Time(imu_packet.timestamp);
                 imu_msg.header.frame_id = "body";
                 merged_imu_pub.publish(imu_msg);
+                publishIntegratedLeveledImu(imu_msg);
                 last_pub_global_imu_ = imu_packet.timestamp;
             }
         }

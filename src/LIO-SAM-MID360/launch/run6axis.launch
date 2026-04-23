@@ -2,12 +2,18 @@
 
     <arg name="project" default="lio_sam"/>
     <arg name="launch_rviz" default="true"/>
+    <arg name="selected_object_map_filter_enabled" default="true"/>
+    <arg name="use_accel_tilt_for_6axis" default="true"/>
+    <arg name="mapping_process_interval" default="0.15"/>
 
     <!-- 指定打印输出的日志等级（调试启动抖动/等待IMU等问题时建议用 warn/info） -->
     <env name="ROSCONSOLE_CONFIG_FILE" value="$(find lio_sam)/launch/include/rosconsole/rosconsole_warn.conf"/>
     
     <!-- Parameters -->
     <rosparam file="$(find lio_sam)/config/paramsLivoxIMU.yaml" command="load" />
+    <param name="lio_sam/mappingProcessInterval" value="$(arg mapping_process_interval)" />
+    <param name="lio_sam/selected_object_map_filter/enabled" value="$(arg selected_object_map_filter_enabled)" />
+    <param name="lio_sam/use_accel_tilt_for_6axis" value="$(arg use_accel_tilt_for_6axis)" />
 
     <!--- LOAM -->
     <include file="$(find lio_sam)/launch/include/module_loam.launch" />

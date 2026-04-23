@@ -1,7 +1,20 @@
 <launch>
   <arg name="config" default="$(find lio_sam)/config/cylinder_object_source.yaml"/>
+  <arg name="visual_objects_topic" default="/segment/object_states"/>
+  <arg name="use_fixed_anchor" default="false"/>
+  <arg name="fixed_anchor_frame" default="base_link"/>
+  <arg name="fixed_anchor_x" default="0.0"/>
+  <arg name="fixed_anchor_y" default="0.0"/>
+  <arg name="fixed_anchor_z" default="-3.0"/>
 
   <rosparam command="load" file="$(arg config)"/>
 
-  <node pkg="lio_sam" type="lio_sam_cylinderObjectSource" name="cylinder_object_source" output="screen" ns="/" />
+  <node pkg="lio_sam" type="lio_sam_cylinderObjectSource" name="cylinder_object_source" output="screen" ns="/">
+    <param name="visual_objects_topic" value="$(arg visual_objects_topic)"/>
+    <param name="use_fixed_anchor" value="$(arg use_fixed_anchor)"/>
+    <param name="fixed_anchor_frame" value="$(arg fixed_anchor_frame)"/>
+    <param name="fixed_anchor_x" value="$(arg fixed_anchor_x)"/>
+    <param name="fixed_anchor_y" value="$(arg fixed_anchor_y)"/>
+    <param name="fixed_anchor_z" value="$(arg fixed_anchor_z)"/>
+  </node>
 </launch>

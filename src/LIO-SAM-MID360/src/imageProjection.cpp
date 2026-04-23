@@ -389,6 +389,12 @@ public:
         cloudInfo.initialGuessPitch = pitch;
         cloudInfo.initialGuessYaw   = yaw;
 
+        if (imuType == 0 && useAccelTiltForSixAxis)
+        {
+            cloudInfo.initialGuessRoll = cloudInfo.imuRollInit;
+            cloudInfo.initialGuessPitch = cloudInfo.imuPitchInit;
+        }
+
         cloudInfo.odomAvailable = true;
 
         // get end odometry at the end of the scan

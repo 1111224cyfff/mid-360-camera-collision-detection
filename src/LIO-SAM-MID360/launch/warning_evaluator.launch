@@ -1,12 +1,25 @@
 <launch>
   <arg name="config" default="$(find lio_sam)/config/warning_evaluator.yaml"/>
+  <arg name="self_filter_config" default="$(find lio_sam)/config/static_cloud_self_filter.yaml"/>
   <arg name="output_frame" default="map"/>
   <arg name="monitored_source_mode" default="visual"/>
+  <arg name="visual_objects_topic" default="/segment/object_states"/>
+  <arg name="static_cloud_topic" default="/lio_sam/mapping/map_local"/>
+  <arg name="filtered_static_cloud_topic" default="/warning/static_cloud_filtered"/>
 
   <rosparam command="load" file="$(arg config)"/>
+  <rosparam command="load" file="$(arg self_filter_config)"/>
+
+  <node pkg="lio_sam" type="lio_sam_staticCloudSelfFilter" name="static_cloud_self_filter" output="screen" ns="/">
+    <param name="input_cloud_topic" value="$(arg static_cloud_topic)"/>
+    <param name="visual_objects_topic" value="$(arg visual_objects_topic)"/>
+    <param name="output_topic" value="$(arg filtered_static_cloud_topic)"/>
+  </node>
 
   <node pkg="lio_sam" type="lio_sam_warningEvaluator" name="warning_evaluator" output="screen" ns="/">
     <param name="output_frame" value="$(arg output_frame)"/>
     <param name="monitored_source_mode" value="$(arg monitored_source_mode)"/>
+    <param name="visual_objects_topic" value="$(arg visual_objects_topic)"/>
+    <param name="static_cloud_topic" value="$(arg filtered_static_cloud_topic)"/>
   </node>
 </launch>

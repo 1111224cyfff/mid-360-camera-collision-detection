@@ -1,0 +1,12 @@
+<launch>
+  <arg name="config" default="$(find lio_sam)/config/visual_object_selector.yaml"/>
+  <arg name="input_objects_topic" default="/segment/object_states"/>
+  <arg name="output_topic" default="/warning/selected_visual_object_states"/>
+
+  <rosparam command="load" file="$(arg config)"/>
+
+  <node pkg="lio_sam" type="lio_sam_visualObjectSelector" name="visual_object_selector" output="screen" ns="/">
+    <param name="input_objects_topic" value="$(arg input_objects_topic)"/>
+    <param name="output_topic" value="$(arg output_topic)"/>
+  </node>
+</launch>

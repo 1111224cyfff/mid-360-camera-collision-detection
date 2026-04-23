@@ -127,6 +127,16 @@ add_executable(${PROJECT_NAME}_cylinderObjectSource src/cylinderObjectSource.cpp
 add_dependencies(${PROJECT_NAME}_cylinderObjectSource ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
 target_link_libraries(${PROJECT_NAME}_cylinderObjectSource ${catkin_LIBRARIES} ${PCL_LIBRARIES})
 
+# Visual monitored-object selector (publish one shared target for warning/cylinder consumers)
+add_executable(${PROJECT_NAME}_visualObjectSelector src/visualObjectSelector.cpp)
+add_dependencies(${PROJECT_NAME}_visualObjectSelector ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_visualObjectSelector ${catkin_LIBRARIES})
+
+# Static cloud self-filter (remove monitored object occupancy from warning static cloud)
+add_executable(${PROJECT_NAME}_staticCloudSelfFilter src/staticCloudSelfFilter.cpp)
+add_dependencies(${PROJECT_NAME}_staticCloudSelfFilter ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)
+target_link_libraries(${PROJECT_NAME}_staticCloudSelfFilter ${catkin_LIBRARIES} ${PCL_LIBRARIES})
+
 # Early warning evaluator (static clearance + dynamic trend fusion)
 add_executable(${PROJECT_NAME}_warningEvaluator src/warningEvaluator.cpp)
 add_dependencies(${PROJECT_NAME}_warningEvaluator ${catkin_EXPORTED_TARGETS} ${PROJECT_NAME}_generate_messages_cpp)

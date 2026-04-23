@@ -33,7 +33,7 @@ Visualization Manager:
         Z: 0
       Plane: XY
       Plane Cell Count: 120
-      Reference Frame: map
+      Reference Frame: odom
       Value: true
     - Class: rviz/Group
       Displays:
@@ -81,7 +81,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: Intensity
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Max Intensity: 255
@@ -98,7 +98,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -111,7 +111,7 @@ Visualization Manager:
           Color: 255; 255; 255
           Color Transformer: RGB8
           Decay Time: 0
-          Enabled: false
+          Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Max Intensity: 255
@@ -119,7 +119,7 @@ Visualization Manager:
           Min Intensity: 0
           Name: Colored Point Cloud
           Position Transformer: XYZ
-          Queue Size: 5
+          Queue Size: 10
           Selectable: true
           Size (Pixels): 4
           Size (m): 0.03999999910593033
@@ -128,7 +128,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: false
+          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -141,7 +141,7 @@ Visualization Manager:
           Color: 255; 0; 0
           Color Transformer: FlatColor
           Decay Time: 0
-          Enabled: true
+          Enabled: false
           Invert Rainbow: false
           Max Color: 255; 255; 255
           Min Color: 0; 0; 0
@@ -156,7 +156,7 @@ Visualization Manager:
           Unreliable: false
           Use Fixed Frame: true
           Use rainbow: true
-          Value: true
+          Value: false
       Enabled: true
       Name: Point Cloud
     - Class: rviz/Group
@@ -186,7 +186,7 @@ Visualization Manager:
           Unreliable: false
           Value: true
         - Class: rviz/Image
-          Enabled: false
+          Enabled: true
           Image Topic: /segment/topic_res_img_pc_
           Max Value: 1
           Median window: 5
@@ -196,41 +196,11 @@ Visualization Manager:
           Queue Size: 1
           Transport Hint: raw
           Unreliable: false
-          Value: false
+          Value: true
       Enabled: true
       Name: Camera
     - Class: rviz/Group
       Displays:
-        - Alpha: 0.30000001192092896
-          Autocompute Intensity Bounds: false
-          Autocompute Value Bounds:
-            Max Value: 7.4858574867248535
-            Min Value: -1.2309398651123047
-            Value: true
-          Axis: Z
-          Channel Name: intensity
-          Class: rviz/PointCloud2
-          Color: 255; 255; 255
-          Color Transformer: Intensity
-          Decay Time: 300
-          Enabled: true
-          Invert Rainbow: false
-          Max Color: 255; 255; 255
-          Max Intensity: 128
-          Min Color: 0; 0; 0
-          Min Intensity: 0
-          Name: Map (cloud)
-          Position Transformer: XYZ
-          Queue Size: 10
-          Selectable: false
-          Size (Pixels): 1
-          Size (m): 0.009999999776482582
-          Style: Points
-          Topic: /lio_sam/mapping/cloud_registered
-          Unreliable: false
-          Use Fixed Frame: true
-          Use rainbow: true
-          Value: true
         - Alpha: 1
           Autocompute Intensity Bounds: true
           Autocompute Value Bounds:
@@ -334,52 +304,52 @@ Visualization Manager:
           Unreliable: false
           Value: true
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /dynamic_tracker/tracks
           Name: Dynamic Tracks
           Namespaces:
             {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /dynamic_tracker/predictions
           Name: Dynamic Predictions
           Namespaces:
             {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /warning/cylinder_object_markers
           Name: Cylinder Source
           Namespaces:
             {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /warning/visual_object_markers
           Name: Visual Object Envelope
           Namespaces:
             {}
           Queue Size: 100
-          Value: true
+          Value: false
         - Class: rviz/MarkerArray
-          Enabled: true
+          Enabled: false
           Marker Topic: /warning/markers
           Name: Warning Markers
           Namespaces:
             {}
           Queue Size: 100
-          Value: true
+          Value: false
       Enabled: true
       Name: Mapping
   Enabled: true
   Global Options:
     Background Color: 0; 0; 0
     Default Light: true
-    Fixed Frame: map
+    Fixed Frame: odom
     Frame Rate: 15
   Name: root
   Tools:

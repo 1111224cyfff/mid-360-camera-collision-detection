@@ -7,15 +7,15 @@ Offset_y: 0             #Y方向偏置
 FrameRateEnable: true   #使能 
 FrameRate: 10           #帧率
 
-ExposureTime: 4000     #曝光时间
+ExposureTime: 1000     #曝光时间，户外白天建议从 1500~3000 起调
 
 # 白平衡
 BalanceWhiteAuto: 2    # 0:手动 1:一次 2:连续(若设备支持)
 
-GammaEnable: true
-Gamma: 0.7              #伽马因子
+GammaEnable: false
+Gamma: 1.0              #伽马因子，关闭时不生效
 
-GainAuto: 2             #亮度的固定增益
+GainAuto: 2             #自动增益模式
 
 SaturationEnable: false
 Saturation: 128          #饱和度

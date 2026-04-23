@@ -290,6 +290,9 @@ private:
   {
     rememberSourceFrame(msg->header.frame_id);
 
+    if (cloud_pub_.getNumSubscribers() == 0)
+      return;
+
     if (!calibrated_)
     {
       ROS_WARN_THROTTLE(2.0, "[merged_pointcloud_leveler] Waiting for IMU calibration; dropping PointCloud2 until calibrated");

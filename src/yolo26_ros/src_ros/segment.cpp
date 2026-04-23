@@ -2,9 +2,11 @@
 #include <cmath>
 #include "opencv2/opencv.hpp"
 #include <lio_sam/SegmentedObjectStateArray.h>
+#include <sensor_msgs/CompressedImage.h>
 #include <sensor_msgs/PointCloud2.h>
 #include <ros/ros.h>
 #include <sensor_msgs/Image.h>
+#include <std_msgs/Header.h>
 #include <cv_bridge/cv_bridge.h>
 #include <message_filters/subscriber.h>
 #include <message_filters/synchronizer.h>
@@ -20,6 +22,8 @@
 #include <fstream>
 #include <stdexcept>
 #include <algorithm>
+#include <cstdio>
+#include <xmlrpcpp/XmlRpcValue.h>
 
 // pcl headers
 #include <pcl/visualization/pcl_visualizer.h>
@@ -27,6 +31,8 @@
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/filters/voxel_grid.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/segmentation/extract_clusters.h>
 #include "infer.h"
 
 namespace {
@@ -35,7 +41,43 @@ struct SegmentObject {
     int label = 0;
     float prob = 0.0f;
     cv::Mat boxMask;
+    cv::Mat coreMask;
 };
+
+struct ObjectCloudRefineSettings {
+    bool enable = true;
+    int mask_erode_pixels = 2;
+    int min_core_points = 8;
+    double range_gate_min_m = 0.8;
+    double range_gate_scale = 0.08;
+    double cluster_tolerance_m = 0.6;
+    int cluster_min_points = 20;
+    double radius_percentile = 0.95;
+    double radius_outlier_tolerance_m = 0.25;
+    int radius_outlier_min_support_points = 3;
+    double radius_padding_m = 0.12;
+    double max_accepted_radius_m = 0.0;
+};
+
+struct PlanarRadiusStats {
+    double robust_radius = 0.0;
+    double max_radius = 0.0;
+    int outer_support_points = 0;
+};
+
+double computeMaxSpatialRadius(
+    const std::vector<pcl::PointXYZI>& cloud,
+    const geometry_msgs::Point& centroid)
+{
+    double max_radius = 0.0;
+    for (const auto& point : cloud) {
+        const double dx = static_cast<double>(point.x) - centroid.x;
+        const double dy = static_cast<double>(point.y) - centroid.y;
+        const double dz = static_cast<double>(point.z) - centroid.z;
+        max_radius = std::max(max_radius, std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    return max_radius;
+}
 
 struct ProjectionModel {
     cv::Mat intrinsic;
@@ -151,7 +193,43 @@ bool isPointInsideInstance(const cv::Mat& instanceMask, int x, int y)
     return instanceMask.at<uchar>(y, x) != 0;
 }
 
-std::vector<SegmentObject> convertDetectionsToObjects(const std::vector<Detection>& detections, const cv::Size& imageSize)
+std::string resolveClassName(const std::vector<std::string>& class_names, int class_id)
+{
+    if (class_id >= 0 && static_cast<size_t>(class_id) < class_names.size()) {
+        return class_names[static_cast<size_t>(class_id)];
+    }
+    return "class" + std::to_string(class_id);
+}
+
+std::vector<std::string> readClassNamesParam(ros::NodeHandle& node)
+{
+    std::vector<std::string> class_names;
+    XmlRpc::XmlRpcValue class_names_param;
+    if (!node.getParam("class_names", class_names_param)) {
+        return class_names;
+    }
+
+    if (class_names_param.getType() != XmlRpc::XmlRpcValue::TypeArray) {
+        ROS_WARN("Parameter 'class_names' exists but is not a list. Falling back to generated class labels.");
+        return class_names;
+    }
+
+    class_names.reserve(class_names_param.size());
+    for (int i = 0; i < class_names_param.size(); ++i) {
+        if (class_names_param[i].getType() != XmlRpc::XmlRpcValue::TypeString) {
+            ROS_WARN("Parameter 'class_names[%d]' is not a string. Ignoring this item.", i);
+            continue;
+        }
+        class_names.push_back(static_cast<std::string>(class_names_param[i]));
+    }
+
+    return class_names;
+}
+
+std::vector<SegmentObject> convertDetectionsToObjects(
+    const std::vector<Detection>& detections,
+    const cv::Size& imageSize,
+    const ObjectCloudRefineSettings& refine_settings)
 {
     std::vector<SegmentObject> objects;
     objects.reserve(detections.size());
@@ -171,21 +249,287 @@ std::vector<SegmentObject> convertDetectionsToObjects(const std::vector<Detectio
         cv::threshold(roiMask, binaryMask, 0.5, 255.0, cv::THRESH_BINARY);
         binaryMask.convertTo(binaryMask, CV_8U);
 
+        cv::Mat coreMask = binaryMask.clone();
+        const int min_mask_side = std::min(binaryMask.cols, binaryMask.rows);
+        const int erode_pixels = std::max(
+            0,
+            std::min(refine_settings.mask_erode_pixels, std::max(0, (min_mask_side - 1) / 8)));
+        if (erode_pixels > 0) {
+            const int kernel_size = 2 * erode_pixels + 1;
+            const cv::Mat kernel = cv::getStructuringElement(
+                cv::MORPH_ELLIPSE,
+                cv::Size(kernel_size, kernel_size));
+            cv::erode(binaryMask, coreMask, kernel);
+            if (cv::countNonZero(coreMask) == 0) {
+                coreMask = binaryMask.clone();
+            }
+        }
+
         SegmentObject obj;
         obj.rect = rect;
         obj.label = det.classId;
         obj.prob = det.conf;
         obj.boxMask = binaryMask;
+        obj.coreMask = coreMask;
         objects.push_back(std::move(obj));
     }
     return objects;
+}
+
+double pointRange(const pcl::PointXYZI& point)
+{
+    return std::sqrt(
+        static_cast<double>(point.x) * static_cast<double>(point.x)
+        + static_cast<double>(point.y) * static_cast<double>(point.y)
+        + static_cast<double>(point.z) * static_cast<double>(point.z));
+}
+
+double computePercentile(std::vector<double> values, double percentile)
+{
+    if (values.empty()) {
+        return 0.0;
+    }
+
+    std::sort(values.begin(), values.end());
+    const double clamped_percentile = std::max(0.0, std::min(1.0, percentile));
+    const double position = clamped_percentile * static_cast<double>(values.size() - 1);
+    const size_t lower_index = static_cast<size_t>(std::floor(position));
+    const size_t upper_index = static_cast<size_t>(std::ceil(position));
+    if (lower_index == upper_index) {
+        return values[lower_index];
+    }
+
+    const double blend = position - static_cast<double>(lower_index);
+    return values[lower_index] * (1.0 - blend) + values[upper_index] * blend;
+}
+
+cv::Point3d computeCentroid(
+    const std::vector<pcl::PointXYZI>& points,
+    const std::vector<int>* indices = nullptr)
+{
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_z = 0.0;
+    size_t count = 0;
+
+    if (indices) {
+        for (const int index : *indices) {
+            if (index < 0 || static_cast<size_t>(index) >= points.size()) {
+                continue;
+            }
+            const auto& point = points[static_cast<size_t>(index)];
+            sum_x += point.x;
+            sum_y += point.y;
+            sum_z += point.z;
+            ++count;
+        }
+    } else {
+        for (const auto& point : points) {
+            sum_x += point.x;
+            sum_y += point.y;
+            sum_z += point.z;
+            ++count;
+        }
+    }
+
+    if (count == 0) {
+        return cv::Point3d(0.0, 0.0, 0.0);
+    }
+    const double inv_count = 1.0 / static_cast<double>(count);
+    return cv::Point3d(sum_x * inv_count, sum_y * inv_count, sum_z * inv_count);
+}
+
+double distanceSquared(const cv::Point3d& lhs, const cv::Point3d& rhs)
+{
+    const double dx = lhs.x - rhs.x;
+    const double dy = lhs.y - rhs.y;
+    const double dz = lhs.z - rhs.z;
+    return dx * dx + dy * dy + dz * dz;
+}
+
+std::vector<pcl::PointXYZI> refineObjectPointCloud(
+    const std::vector<pcl::PointXYZI>& points,
+    const std::vector<uint8_t>& core_flags,
+    const ObjectCloudRefineSettings& settings)
+{
+    if (!settings.enable || points.size() < static_cast<size_t>(std::max(1, settings.cluster_min_points))) {
+        return points;
+    }
+
+    std::vector<int> reference_indices;
+    reference_indices.reserve(points.size());
+    for (size_t index = 0; index < points.size() && index < core_flags.size(); ++index) {
+        if (core_flags[index] != 0) {
+            reference_indices.push_back(static_cast<int>(index));
+        }
+    }
+
+    const bool has_core_reference = reference_indices.size() >= static_cast<size_t>(std::max(1, settings.min_core_points));
+    if (!has_core_reference) {
+        reference_indices.clear();
+        reference_indices.reserve(points.size());
+        for (size_t index = 0; index < points.size(); ++index) {
+            reference_indices.push_back(static_cast<int>(index));
+        }
+    }
+
+    std::vector<double> reference_ranges;
+    reference_ranges.reserve(reference_indices.size());
+    for (const int index : reference_indices) {
+        reference_ranges.push_back(pointRange(points[static_cast<size_t>(index)]));
+    }
+    const double reference_range = computePercentile(reference_ranges, 0.5);
+    const cv::Point3d reference_centroid = computeCentroid(points, &reference_indices);
+    const double range_gate = std::max(
+        settings.range_gate_min_m,
+        settings.range_gate_scale * std::max(1.0, reference_range));
+
+    std::vector<pcl::PointXYZI> gated_points;
+    std::vector<uint8_t> gated_core_flags;
+    gated_points.reserve(points.size());
+    gated_core_flags.reserve(points.size());
+    for (size_t index = 0; index < points.size(); ++index) {
+        const bool is_core = index < core_flags.size() && core_flags[index] != 0;
+        const double range = pointRange(points[index]);
+        if (!is_core && std::fabs(range - reference_range) > range_gate) {
+            continue;
+        }
+        gated_points.push_back(points[index]);
+        gated_core_flags.push_back(is_core ? 1 : 0);
+    }
+
+    if (gated_points.size() < static_cast<size_t>(std::max(1, settings.cluster_min_points))) {
+        gated_points = points;
+        gated_core_flags = core_flags;
+    }
+
+    if (gated_points.size() < static_cast<size_t>(std::max(1, settings.cluster_min_points))
+        || settings.cluster_tolerance_m <= 0.0) {
+        return gated_points;
+    }
+
+    pcl::PointCloud<pcl::PointXYZI>::Ptr cluster_cloud(new pcl::PointCloud<pcl::PointXYZI>());
+    cluster_cloud->points.assign(gated_points.begin(), gated_points.end());
+    cluster_cloud->width = static_cast<uint32_t>(gated_points.size());
+    cluster_cloud->height = 1;
+    cluster_cloud->is_dense = false;
+
+    pcl::search::KdTree<pcl::PointXYZI>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZI>());
+    tree->setInputCloud(cluster_cloud);
+
+    pcl::EuclideanClusterExtraction<pcl::PointXYZI> cluster_extractor;
+    cluster_extractor.setClusterTolerance(static_cast<float>(settings.cluster_tolerance_m));
+    cluster_extractor.setMinClusterSize(std::max(1, settings.cluster_min_points));
+    cluster_extractor.setMaxClusterSize(static_cast<int>(gated_points.size()));
+    cluster_extractor.setSearchMethod(tree);
+    cluster_extractor.setInputCloud(cluster_cloud);
+
+    std::vector<pcl::PointIndices> cluster_indices;
+    cluster_extractor.extract(cluster_indices);
+    if (cluster_indices.empty()) {
+        return gated_points;
+    }
+
+    size_t best_cluster_index = 0;
+    int best_core_hits = -1;
+    size_t best_size = 0;
+    double best_centroid_distance_sq = std::numeric_limits<double>::infinity();
+    double best_range_delta = std::numeric_limits<double>::infinity();
+
+    for (size_t cluster_index = 0; cluster_index < cluster_indices.size(); ++cluster_index) {
+        const auto& indices = cluster_indices[cluster_index].indices;
+        int core_hits = 0;
+        std::vector<double> cluster_ranges;
+        cluster_ranges.reserve(indices.size());
+        for (const int index : indices) {
+            if (index >= 0 && static_cast<size_t>(index) < gated_core_flags.size() && gated_core_flags[static_cast<size_t>(index)] != 0) {
+                ++core_hits;
+            }
+            if (index >= 0 && static_cast<size_t>(index) < gated_points.size()) {
+                cluster_ranges.push_back(pointRange(gated_points[static_cast<size_t>(index)]));
+            }
+        }
+
+        const cv::Point3d cluster_centroid = computeCentroid(gated_points, &indices);
+        const double centroid_distance_sq = distanceSquared(cluster_centroid, reference_centroid);
+        const double range_delta = std::fabs(computePercentile(cluster_ranges, 0.5) - reference_range);
+
+        bool choose_cluster = false;
+        if (has_core_reference) {
+            choose_cluster = core_hits > best_core_hits
+                || (core_hits == best_core_hits && centroid_distance_sq < best_centroid_distance_sq - 1e-6)
+                || (core_hits == best_core_hits && std::fabs(centroid_distance_sq - best_centroid_distance_sq) <= 1e-6 && indices.size() > best_size);
+        } else {
+            choose_cluster = indices.size() > best_size
+                || (indices.size() == best_size && range_delta < best_range_delta - 1e-6)
+                || (indices.size() == best_size && std::fabs(range_delta - best_range_delta) <= 1e-6
+                    && centroid_distance_sq < best_centroid_distance_sq - 1e-6);
+        }
+
+        if (!choose_cluster) {
+            continue;
+        }
+
+        best_cluster_index = cluster_index;
+        best_core_hits = core_hits;
+        best_size = indices.size();
+        best_centroid_distance_sq = centroid_distance_sq;
+        best_range_delta = range_delta;
+    }
+
+    std::vector<pcl::PointXYZI> refined_points;
+    refined_points.reserve(cluster_indices[best_cluster_index].indices.size());
+    for (const int index : cluster_indices[best_cluster_index].indices) {
+        if (index < 0 || static_cast<size_t>(index) >= gated_points.size()) {
+            continue;
+        }
+        refined_points.push_back(gated_points[static_cast<size_t>(index)]);
+    }
+    return refined_points.empty() ? gated_points : refined_points;
+}
+
+PlanarRadiusStats computePlanarRadiusStats(
+    const std::vector<pcl::PointXYZI>& cloud,
+    const geometry_msgs::Point& centroid,
+    double percentile,
+    double outlier_tolerance_m)
+{
+    PlanarRadiusStats stats;
+    if (cloud.empty()) {
+        return stats;
+    }
+
+    std::vector<double> distances;
+    distances.reserve(cloud.size());
+    for (const auto& point : cloud) {
+        const double dx = static_cast<double>(point.x) - centroid.x;
+        const double dy = static_cast<double>(point.y) - centroid.y;
+        distances.push_back(std::hypot(dx, dy));
+    }
+
+    stats.robust_radius = computePercentile(distances, percentile);
+    const auto max_it = std::max_element(distances.begin(), distances.end());
+    if (max_it != distances.end()) {
+        stats.max_radius = *max_it;
+    }
+
+    const double support_threshold = stats.robust_radius + std::max(0.0, outlier_tolerance_m);
+    stats.outer_support_points = static_cast<int>(std::count_if(
+        distances.begin(),
+        distances.end(),
+        [support_threshold](double distance) {
+            return distance > support_threshold;
+        }));
+
+    return stats;
 }
 
 lio_sam::SegmentedObjectStateArray buildSegmentedObjectStateArray(
     const std_msgs::Header& header,
     const std::vector<SegmentObject>& objects,
     const std::vector<std::vector<pcl::PointXYZI>>& object_clouds,
-    const std::vector<std::string>& class_names)
+    const std::vector<std::string>& class_names,
+    const ObjectCloudRefineSettings& refine_settings)
 {
     lio_sam::SegmentedObjectStateArray out;
     out.header = header;
@@ -235,11 +579,7 @@ lio_sam::SegmentedObjectStateArray buildSegmentedObjectStateArray(
 
         lio_sam::SegmentedObjectState state;
         state.class_id = object.label;
-        if (object.label >= 0 && static_cast<size_t>(object.label) < class_names.size()) {
-            state.class_name = class_names[object.label];
-        } else {
-            state.class_name = "unknown";
-        }
+        state.class_name = resolveClassName(class_names, object.label);
         state.confidence = object.prob;
         state.pose.position.x = sum_x / point_count;
         state.pose.position.y = sum_y / point_count;
@@ -248,7 +588,38 @@ lio_sam::SegmentedObjectStateArray buildSegmentedObjectStateArray(
         state.size.x = size_x;
         state.size.y = size_y;
         state.size.z = size_z;
-        state.bounding_radius = 0.5 * std::sqrt(size_x * size_x + size_y * size_y + size_z * size_z);
+        const PlanarRadiusStats planar_radius_stats = computePlanarRadiusStats(
+            cloud,
+            state.pose.position,
+            refine_settings.radius_percentile,
+            refine_settings.radius_outlier_tolerance_m);
+        const double fallback_planar_radius = 0.5 * std::hypot(size_x, size_y);
+        const double robust_planar_radius = planar_radius_stats.robust_radius > 1e-3
+            ? planar_radius_stats.robust_radius
+            : fallback_planar_radius;
+        const double max_planar_radius = planar_radius_stats.max_radius > 1e-3
+            ? planar_radius_stats.max_radius
+            : fallback_planar_radius;
+        const bool accept_max_radius = max_planar_radius <= robust_planar_radius + refine_settings.radius_outlier_tolerance_m
+            || planar_radius_stats.outer_support_points >= refine_settings.radius_outlier_min_support_points;
+
+        double authoritative_radius = (accept_max_radius ? max_planar_radius : robust_planar_radius)
+            + std::max(0.0, refine_settings.radius_padding_m);
+        if (refine_settings.max_accepted_radius_m > 1e-3) {
+            authoritative_radius = std::min(authoritative_radius, refine_settings.max_accepted_radius_m);
+        }
+        authoritative_radius = std::max(0.05, authoritative_radius);
+
+        double bounding_radius = std::max(
+            authoritative_radius,
+            computeMaxSpatialRadius(cloud, state.pose.position) + std::max(0.0, refine_settings.radius_padding_m));
+        if (refine_settings.max_accepted_radius_m > 1e-3) {
+            bounding_radius = std::min(bounding_radius, refine_settings.max_accepted_radius_m);
+        }
+        bounding_radius = std::max(authoritative_radius, bounding_radius);
+
+        state.bounding_radius = bounding_radius;
+        state.footprint_radius = authoritative_radius;
         state.nearest_range = nearest_range;
         state.point_count = static_cast<uint32_t>(cloud.size());
         out.objects.push_back(state);
@@ -267,22 +638,33 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
     const pcl::PointCloud<pcl::PointXYZI>::Ptr& input_cloud_ptr,
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr& colored_cloud,
     const ProjectionModel& projection_model,
+    const ObjectCloudRefineSettings& refine_settings,
     cv::Mat* projected_overlay_image)
 {
     res = image.clone();
     cv::Mat mask = image.clone();
     std::vector<std::vector<pcl::PointXYZI>> objects_pointcloud(objs.size());
+    std::vector<std::vector<uint8_t>> objects_core_flags(objs.size());
     std::vector<cv::Point> projected_points;
     projected_points.reserve(input_cloud_ptr ? input_cloud_ptr->points.size() : 0);
 
     colored_cloud.reset(new pcl::PointCloud<pcl::PointXYZRGB>);
     for (const auto& obj : objs) {
         int idx = obj.label;
-        cv::Scalar color(colors[idx][0], colors[idx][1], colors[idx][2]);
-        cv::Scalar mask_color(maskColors[idx % 20][0], maskColors[idx % 20][1], maskColors[idx % 20][2]);
+        const size_t idx_safe = idx >= 0 ? static_cast<size_t>(idx) : 0u;
+        const size_t color_idx = colors.empty() ? 0u : (idx_safe % colors.size());
+        const size_t mask_color_idx = maskColors.empty() ? 0u : (idx_safe % maskColors.size());
+
+        const cv::Scalar color = colors.empty()
+            ? cv::Scalar(0, 255, 0)
+            : cv::Scalar(colors[color_idx][0], colors[color_idx][1], colors[color_idx][2]);
+        const cv::Scalar mask_color = maskColors.empty()
+            ? cv::Scalar(255, 56, 56)
+            : cv::Scalar(maskColors[mask_color_idx][0], maskColors[mask_color_idx][1], maskColors[mask_color_idx][2]);
         cv::rectangle(res, obj.rect, color, 5);
         char text[256];
-        sprintf(text, "%s %.1f%%", classNames[idx].c_str(), obj.prob * 100);
+        const std::string class_name = resolveClassName(classNames, idx);
+        std::snprintf(text, sizeof(text), "%s %.1f%%", class_name.c_str(), obj.prob * 100.0f);
         mask(obj.rect).setTo(mask_color, obj.boxMask);
 
         int baseLine = 0;
@@ -318,6 +700,8 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
             }
             if (isPointInsideInstance(obj.boxMask, relative_x, relative_y)) {
                 objects_pointcloud[i].push_back(point);
+                const bool is_core = !obj.coreMask.empty() && isPointInsideInstance(obj.coreMask, relative_x, relative_y);
+                objects_core_flags[i].push_back(is_core ? 1 : 0);
                 assigned = true;
                 break;
             }
@@ -331,6 +715,10 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
                                 : ((uint32_t)255 << 16 | (uint32_t)255 << 8 | (uint32_t)255);
         colored_point.rgb = *reinterpret_cast<float*>(&rgb);
         colored_cloud->points.push_back(colored_point);
+    }
+
+    for (size_t i = 0; i < objects_pointcloud.size(); ++i) {
+        objects_pointcloud[i] = refineObjectPointCloud(objects_pointcloud[i], objects_core_flags[i], refine_settings);
     }
 
     std::vector<cv::Point3d> object_centroids(objs.size(), cv::Point3d(0, 0, 0));
@@ -368,22 +756,6 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
 }
 }  // namespace
 
-// 常量定义
-const std::vector<std::string> CLASS_NAMES = {
-    "exca-arm", "exca-body", "person", "crane", "truck", "bus", "train",
-    "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench",
-    "bird", "cat", "dog", "horse", "sheep", "cow", "elephant",
-    "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie",
-    "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat",
-    "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup",
-    "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich",
-    "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake",
-    "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv",
-    "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven",
-    "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors",
-    "teddy bear", "hair drier", "toothbrush"
-};
-
 const std::vector<std::vector<unsigned int>> COLORS = {
     {0,114,189}, {217,83,25}, {237,177,32}, {126,47,142}, {119,172,48}, {77,190,238},
     {162,20,47}, {76,76,76}, {153,153,153}, {255,0,0}, {255,128,0}, {191,191,0},
@@ -412,11 +784,14 @@ class RosNode
 public:
     RosNode();
     ~RosNode(){};
-    void callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg);
+    void rawCallback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg);
+    void compressedCallback(const sensor_msgs::CompressedImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg);
+    void processFrame(const std_msgs::Header& image_header, const cv::Mat& image, const sensor_msgs::PointCloud2ConstPtr &cloud_msg);
 
     std::vector<std::vector<pcl::PointXYZI>> pointcloud_vec;
 private:
-    using SyncPolicy = message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::PointCloud2>;
+    using RawSyncPolicy = message_filters::sync_policies::ApproximateTime<sensor_msgs::Image, sensor_msgs::PointCloud2>;
+    using CompressedSyncPolicy = message_filters::sync_policies::ApproximateTime<sensor_msgs::CompressedImage, sensor_msgs::PointCloud2>;
 
     std::string pkg_path_, engine_file_path_, projection_config_path_;
     std::shared_ptr<YoloDetector> detector_;
@@ -429,14 +804,18 @@ private:
     std::vector<SegmentObject> objs_;
 
     ros::NodeHandle n_;
-    message_filters::Subscriber<sensor_msgs::Image> sub_img_;
+    message_filters::Subscriber<sensor_msgs::Image> sub_img_raw_;
+    message_filters::Subscriber<sensor_msgs::CompressedImage> sub_img_compressed_;
     message_filters::Subscriber<sensor_msgs::PointCloud2> sub_pc_;
-    std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+    std::shared_ptr<message_filters::Synchronizer<RawSyncPolicy>> raw_sync_;
+    std::shared_ptr<message_filters::Synchronizer<CompressedSyncPolicy>> compressed_sync_;
     ros::Publisher pub_img_;
     ros::Publisher pub_img_pc_;
     ros::Publisher pub_color_cloud_;
     ros::Publisher pub_object_states_;
     std::string topic_img_, topic_res_img_, weight_name_, topic_pointcloud_, topic_res_img_pc_, topic_object_states_;
+    std::vector<std::string> class_names_;
+    bool use_compressed_image_ = false;
     bool flip_lidar_y_for_projection_ = false;
     bool use_tf_for_projection_ = true;
     double tf_lookup_timeout_sec_ = 0.02;
@@ -460,6 +839,7 @@ private:
 
     bool enable_pointcloud_downsample_ = true;
     double pointcloud_leaf_size_m_ = 0.03;
+    ObjectCloudRefineSettings object_cloud_refine_settings_;
 
     bool tryBuildProjectionModelFromTf(
         const std::string& target_frame,
@@ -583,8 +963,37 @@ bool RosNode::tryBuildProjectionModelFromTf(
     }
 }
 
-void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
+void RosNode::rawCallback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
 {
+    if (!msg) {
+        return;
+    }
+
+    const cv::Mat image = cv_bridge::toCvShare(msg, "bgr8")->image;
+    processFrame(msg->header, image, cloud_msg);
+}
+
+void RosNode::compressedCallback(const sensor_msgs::CompressedImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
+{
+    if (!msg) {
+        return;
+    }
+
+    const cv::Mat image = cv::imdecode(msg->data, cv::IMREAD_COLOR);
+    if (image.empty()) {
+        ROS_WARN_THROTTLE(2.0, "Failed to decode compressed image from topic %s.", topic_img_.c_str());
+        return;
+    }
+
+    processFrame(msg->header, image, cloud_msg);
+}
+
+void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& image_input, const sensor_msgs::PointCloud2ConstPtr &cloud_msg)
+{
+    if (!cloud_msg) {
+        return;
+    }
+
     const auto callback_start = std::chrono::steady_clock::now();
 
     auto current_cloud = pcl::PointCloud<pcl::PointXYZI>::Ptr(new pcl::PointCloud<pcl::PointXYZI>());
@@ -592,11 +1001,11 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
     const auto& current_cloud_header = cloud_msg->header;
 
     // 图像处理与检测
-    cv::Mat image = cv_bridge::toCvShare(msg, "bgr8")->image;
+    cv::Mat image = image_input;
     const auto infer_start = std::chrono::steady_clock::now();
     auto detections = detector_->inference(image);
     const auto infer_end = std::chrono::steady_clock::now();
-    objs_ = convertDetectionsToObjects(detections, image.size());
+    objs_ = convertDetectionsToObjects(detections, image.size(), object_cloud_refine_settings_);
     const auto convert_end = std::chrono::steady_clock::now();
 
     const auto downsample_start = std::chrono::steady_clock::now();
@@ -618,7 +1027,7 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
 
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_cloud;
 
-    const ros::Duration stamp_delta = msg->header.stamp - cloud_msg->header.stamp;
+    const ros::Duration stamp_delta = image_header.stamp - cloud_msg->header.stamp;
     const double stamp_delta_sec = std::fabs(stamp_delta.toSec());
     if (stamp_delta_sec > sync_max_interval_sec_) {
         ROS_WARN_THROTTLE(
@@ -635,11 +1044,11 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
     }
 
     ProjectionModel active_projection_model = projection_model_;
-    const ros::Time transform_stamp = cloud_msg->header.stamp.isZero() ? msg->header.stamp : cloud_msg->header.stamp;
+    const ros::Time transform_stamp = cloud_msg->header.stamp.isZero() ? image_header.stamp : cloud_msg->header.stamp;
     const auto tf_start = std::chrono::steady_clock::now();
     const bool using_tf_projection =
         use_tf_for_projection_ &&
-        tryBuildProjectionModelFromTf(msg->header.frame_id, cloud_msg->header.frame_id, transform_stamp, &active_projection_model);
+        tryBuildProjectionModelFromTf(image_header.frame_id, cloud_msg->header.frame_id, transform_stamp, &active_projection_model);
     const auto tf_end = std::chrono::steady_clock::now();
 
     if (using_tf_projection) {
@@ -647,7 +1056,7 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
             ROS_INFO(
                 "Using TF for projection from point cloud frame '%s' to image frame '%s'.",
                 cloud_msg->header.frame_id.c_str(),
-                msg->header.frame_id.c_str());
+                image_header.frame_id.c_str());
             tf_projection_logged_ = true;
         }
     } else if (!yaml_fallback_logged_) {
@@ -661,12 +1070,13 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
         image,
         img_res_,
         objs_,
-        CLASS_NAMES,
+        class_names_,
         COLORS,
         MASK_COLORS,
         processing_cloud,
         colored_cloud,
         active_projection_model,
+        object_cloud_refine_settings_,
         &image_to_show);
     const auto draw_end = std::chrono::steady_clock::now();
 
@@ -690,12 +1100,17 @@ void RosNode::callback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs:
     const auto overlay_end = std::chrono::steady_clock::now();
 
     const auto publish_start = std::chrono::steady_clock::now();
-    sensor_msgs::ImagePtr msg_img_new = cv_bridge::CvImage(msg->header, "bgr8", img_res_).toImageMsg();
-    sensor_msgs::ImagePtr msg_img_new_pc = cv_bridge::CvImage(msg->header, "bgr8", image_to_show).toImageMsg();
+    sensor_msgs::ImagePtr msg_img_new = cv_bridge::CvImage(image_header, "bgr8", img_res_).toImageMsg();
+    sensor_msgs::ImagePtr msg_img_new_pc = cv_bridge::CvImage(image_header, "bgr8", image_to_show).toImageMsg();
     ROS_DEBUG_THROTTLE(2.0, "Output Image Size: Width = %d, Height = %d", img_res_.cols, img_res_.rows);
     pub_img_pc_.publish(msg_img_new_pc);
     pub_img_.publish(msg_img_new);
-    pub_object_states_.publish(buildSegmentedObjectStateArray(current_cloud_header, objs_, pointcloud_vec, CLASS_NAMES));
+    pub_object_states_.publish(buildSegmentedObjectStateArray(
+        current_cloud_header,
+        objs_,
+        pointcloud_vec,
+        class_names_,
+        object_cloud_refine_settings_));
 
     sensor_msgs::PointCloud2 output_cloud_msg;
     pcl::toROSMsg(*colored_cloud, output_cloud_msg);
@@ -720,6 +1135,7 @@ RosNode::RosNode()
     pkg_path_ = ros::package::getPath("yolo26_ros");
     projection_config_path_ = pkg_path_ + "/config/segment_projection.yaml";
     n_.param<std::string>("topic_img", topic_img_, "/camera/color/image_raw");
+    n_.param<bool>("use_compressed_image", use_compressed_image_, use_compressed_image_);
     n_.param<std::string>("topic_pointcloud", topic_pointcloud_, "/livox/lidar");
     n_.param<std::string>("topic_res_img", topic_res_img_, "/detect/image_raw");
     n_.param<std::string>("topic_res_img_pc_", topic_res_img_pc_, "/detect/topic_res_img_pc_");
@@ -734,6 +1150,19 @@ RosNode::RosNode()
     n_.param<double>("perf_log_period_sec", perf_log_period_sec_, perf_log_period_sec_);
     n_.param<bool>("enable_pointcloud_downsample", enable_pointcloud_downsample_, enable_pointcloud_downsample_);
     n_.param<double>("pointcloud_leaf_size_m", pointcloud_leaf_size_m_, pointcloud_leaf_size_m_);
+    n_.param<bool>("enable_object_cloud_refine", object_cloud_refine_settings_.enable, object_cloud_refine_settings_.enable);
+    n_.param<int>("object_mask_erode_pixels", object_cloud_refine_settings_.mask_erode_pixels, object_cloud_refine_settings_.mask_erode_pixels);
+    n_.param<int>("object_min_core_points", object_cloud_refine_settings_.min_core_points, object_cloud_refine_settings_.min_core_points);
+    n_.param<double>("object_range_gate_min_m", object_cloud_refine_settings_.range_gate_min_m, object_cloud_refine_settings_.range_gate_min_m);
+    n_.param<double>("object_range_gate_scale", object_cloud_refine_settings_.range_gate_scale, object_cloud_refine_settings_.range_gate_scale);
+    n_.param<double>("object_cluster_tolerance_m", object_cloud_refine_settings_.cluster_tolerance_m, object_cloud_refine_settings_.cluster_tolerance_m);
+    n_.param<int>("object_cluster_min_points", object_cloud_refine_settings_.cluster_min_points, object_cloud_refine_settings_.cluster_min_points);
+    n_.param<double>("object_radius_percentile", object_cloud_refine_settings_.radius_percentile, object_cloud_refine_settings_.radius_percentile);
+    n_.param<double>("object_radius_outlier_tolerance_m", object_cloud_refine_settings_.radius_outlier_tolerance_m, object_cloud_refine_settings_.radius_outlier_tolerance_m);
+    n_.param<int>("object_radius_outlier_min_support_points", object_cloud_refine_settings_.radius_outlier_min_support_points, object_cloud_refine_settings_.radius_outlier_min_support_points);
+    n_.param<double>("object_radius_padding_m", object_cloud_refine_settings_.radius_padding_m, object_cloud_refine_settings_.radius_padding_m);
+    n_.param<double>("object_max_accepted_radius_m", object_cloud_refine_settings_.max_accepted_radius_m, object_cloud_refine_settings_.max_accepted_radius_m);
+    class_names_ = readClassNamesParam(n_);
     engine_file_path_ = pkg_path_ + "/weights/" + weight_name_;
     projection_model_.loadFromFile(projection_config_path_);
     projection_model_.flip_lidar_y = flip_lidar_y_for_projection_;
@@ -742,6 +1171,7 @@ RosNode::RosNode()
 
     std::cout << "\n\033[1;32m--engine_file_path: " << engine_file_path_ << "\033[0m" << std::endl;
     std::cout << "\033[1;32m" << "--topic_img       : " << topic_img_ << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--img_compressed  : " << (use_compressed_image_ ? "true" : "false") << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--topic_res_img   : " << topic_res_img_ << "\n\033[0m" << std::endl;
     std::cout << "\033[1;32m--projection_cfg  : " << projection_config_path_ << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--flip_lidar_y    : " << (flip_lidar_y_for_projection_ ? "true" : "false") << "\033[0m" << std::endl;
@@ -752,6 +1182,22 @@ RosNode::RosNode()
     std::cout << "\033[1;32m--perf_log_period  : " << perf_log_period_sec_ << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--pc_downsample    : " << (enable_pointcloud_downsample_ ? "true" : "false") << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--pc_leaf_size(m)  : " << pointcloud_leaf_size_m_ << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_refine       : " << (object_cloud_refine_settings_.enable ? "true" : "false") << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_mask_erode(px): " << object_cloud_refine_settings_.mask_erode_pixels << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_range_gate(m): min=" << object_cloud_refine_settings_.range_gate_min_m
+              << " scale=" << object_cloud_refine_settings_.range_gate_scale << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_cluster_tol  : " << object_cloud_refine_settings_.cluster_tolerance_m << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_cluster_min  : " << object_cloud_refine_settings_.cluster_min_points << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_radius_pct   : " << object_cloud_refine_settings_.radius_percentile << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_radius_outlier_tol: " << object_cloud_refine_settings_.radius_outlier_tolerance_m << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_radius_outlier_support: " << object_cloud_refine_settings_.radius_outlier_min_support_points << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_radius_padding: " << object_cloud_refine_settings_.radius_padding_m << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--obj_radius_abs_max: " << object_cloud_refine_settings_.max_accepted_radius_m << "\033[0m" << std::endl;
+    if (class_names_.empty()) {
+        ROS_WARN("No 'class_names' parameter provided. Falling back to generated labels like class0/class1.");
+    } else {
+        ROS_INFO("Loaded %zu class names from ROS parameter 'class_names'.", class_names_.size());
+    }
 
     detector_.reset(new YoloDetector(engine_file_path_));
 
@@ -760,11 +1206,19 @@ RosNode::RosNode()
     pub_color_cloud_ = n_.advertise<sensor_msgs::PointCloud2>("/colored_point_cloud", 10);
     pub_object_states_ = n_.advertise<lio_sam::SegmentedObjectStateArray>(topic_object_states_, 10);
 
-    sub_img_.subscribe(n_, topic_img_, 10);
     sub_pc_.subscribe(n_, topic_pointcloud_, 10);
-    sync_.reset(new message_filters::Synchronizer<SyncPolicy>(SyncPolicy(20), sub_img_, sub_pc_));
-    sync_->setMaxIntervalDuration(ros::Duration(sync_max_interval_sec_));
-    sync_->registerCallback(boost::bind(&RosNode::callback, this, _1, _2));
+
+    if (use_compressed_image_) {
+        sub_img_compressed_.subscribe(n_, topic_img_, 10);
+        compressed_sync_.reset(new message_filters::Synchronizer<CompressedSyncPolicy>(CompressedSyncPolicy(20), sub_img_compressed_, sub_pc_));
+        compressed_sync_->setMaxIntervalDuration(ros::Duration(sync_max_interval_sec_));
+        compressed_sync_->registerCallback(boost::bind(&RosNode::compressedCallback, this, _1, _2));
+    } else {
+        sub_img_raw_.subscribe(n_, topic_img_, 10);
+        raw_sync_.reset(new message_filters::Synchronizer<RawSyncPolicy>(RawSyncPolicy(20), sub_img_raw_, sub_pc_));
+        raw_sync_->setMaxIntervalDuration(ros::Duration(sync_max_interval_sec_));
+        raw_sync_->registerCallback(boost::bind(&RosNode::rawCallback, this, _1, _2));
+    }
 }
 
 int main(int argc, char** argv)

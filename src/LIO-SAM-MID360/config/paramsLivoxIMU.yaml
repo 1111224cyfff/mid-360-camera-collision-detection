@@ -102,20 +102,21 @@ lio_sam:
   #   - /lio_sam/mapping/dynamic_clusters
   #   - /lio_sam/mapping/dynamic_cluster_centers
   dynamic_point_detection:
-    # 调试/建图建议先关闭动态点剔除：该模块若过于激进会把大量近距离点当成动态点剔除
+    # 吊运/慢速移动目标场景建议开启动态点剔除，避免目标残影被写进 map_local。
+    # 若出现大量真实静态点被误删，再适当放宽 knn_max_dist_* 参数。
     enabled: false
     knn_k: 5
     # If dynamic detection is intermittent (targets sometimes disappear),
     # slightly lower the base threshold to be more sensitive.
     # Add a small range scale to avoid over-triggering far points.
-    knn_max_dist_base: 0.20
-    knn_max_dist_scale: 0.01
+    knn_max_dist_base: 0.12
+    knn_max_dist_scale: 0.005
     neighbor_radius: 0.80
     min_neighbors: 1
     downsample_leaf_size: 0.10
     max_range: 12.0
     publish_static: false
-    exclude_from_map: true
+    exclude_from_map: false
 
     # Confidence parameters (high = red, low = gray)
     confidence_threshold: 0.5        # [-] >= threshold -> high confidence (red)
@@ -128,6 +129,15 @@ lio_sam:
     cluster_max_size: 20000
     publish_markers: true
     publish_centers: true
+
+  # Explicitly exclude the selected吊物 envelope from new keyframes before points enter map_local.
+  # This complements scan-to-map residual dynamic detection for very slow target motion.
+  selected_object_map_filter:
+    enabled: true
+    objects_topic: /warning/selected_visual_object_states
+    history_duration_sec: 1.5
+    radius_padding_m: 0.15
+    min_radius_m: 0.20
 
 
 

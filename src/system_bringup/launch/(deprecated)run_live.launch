@@ -27,7 +27,7 @@
   <arg name="enable_warning_evaluator" default="false" />
   <arg name="enable_warning_controller" default="false" />
   <arg name="enable_cylinder_object_source" default="true" />
-  <arg name="warning_source_mode" default="visual" />
+  <arg name="warning_source_mode" default="both" />
 
   <arg name="enable_segment" default="false" />
   <arg name="segment_rviz" default="false" />

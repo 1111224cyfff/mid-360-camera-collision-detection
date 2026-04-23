@@ -1,9 +1,10 @@
 <launch>
     <arg name="topic_img" default="/hikrobot_camera/rgb" />
+    <arg name="use_compressed_image" default="false" />
     <arg name="topic_pointcloud" default="/livox/lidar" />
     <arg name="topic_res_img" default="/segment/image_raw" />
     <arg name="topic_res_img_pc" default="/segment/topic_res_img_pc_" />
-    <arg name="weight_name" default="yolo26s-seg.engine" />
+    <arg name="weight_name" default="20260415.engine" />
     <arg name="topic_object_states" default="/segment/object_states" />
     <arg name="projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
     <arg name="flip_lidar_y_for_projection" default="false" />
@@ -13,8 +14,22 @@
     <arg name="sync_max_interval_sec" default="0.12" />
     <arg name="enable_pointcloud_downsample" default="false" />
     <arg name="pointcloud_leaf_size_m" default="0.03" />
+    <arg name="enable_object_cloud_refine" default="true" />
+    <arg name="object_mask_erode_pixels" default="2" />
+    <arg name="object_min_core_points" default="8" />
+    <arg name="object_range_gate_min_m" default="0.8" />
+    <arg name="object_range_gate_scale" default="0.08" />
+    <arg name="object_cluster_tolerance_m" default="0.6" />
+    <arg name="object_cluster_min_points" default="20" />
+    <arg name="object_radius_percentile" default="0.95" />
+    <arg name="object_radius_outlier_tolerance_m" default="0.25" />
+    <arg name="object_radius_outlier_min_support_points" default="3" />
+    <arg name="object_radius_padding_m" default="0.12" />
+    <arg name="object_max_accepted_radius_m" default="0.0" />
+    <arg name="class_names" default="['tower_crane_section','barrier']" />
 
     <param name="topic_img" type="string" value="$(arg topic_img)" />
+    <param name="use_compressed_image" type="bool" value="$(arg use_compressed_image)" />
     <param name="topic_pointcloud" type="string" value="$(arg topic_pointcloud)" />
     <param name="topic_res_img" type="string" value="$(arg topic_res_img)" />
     <param name="topic_res_img_pc_" type="string" value="$(arg topic_res_img_pc)" />
@@ -28,6 +43,19 @@
     <param name="sync_max_interval_sec" type="double" value="$(arg sync_max_interval_sec)" />
     <param name="enable_pointcloud_downsample" type="bool" value="$(arg enable_pointcloud_downsample)" />
     <param name="pointcloud_leaf_size_m" type="double" value="$(arg pointcloud_leaf_size_m)" />
+    <param name="enable_object_cloud_refine" type="bool" value="$(arg enable_object_cloud_refine)" />
+    <param name="object_mask_erode_pixels" type="int" value="$(arg object_mask_erode_pixels)" />
+    <param name="object_min_core_points" type="int" value="$(arg object_min_core_points)" />
+    <param name="object_range_gate_min_m" type="double" value="$(arg object_range_gate_min_m)" />
+    <param name="object_range_gate_scale" type="double" value="$(arg object_range_gate_scale)" />
+    <param name="object_cluster_tolerance_m" type="double" value="$(arg object_cluster_tolerance_m)" />
+    <param name="object_cluster_min_points" type="int" value="$(arg object_cluster_min_points)" />
+    <param name="object_radius_percentile" type="double" value="$(arg object_radius_percentile)" />
+    <param name="object_radius_outlier_tolerance_m" type="double" value="$(arg object_radius_outlier_tolerance_m)" />
+    <param name="object_radius_outlier_min_support_points" type="int" value="$(arg object_radius_outlier_min_support_points)" />
+    <param name="object_radius_padding_m" type="double" value="$(arg object_radius_padding_m)" />
+    <param name="object_max_accepted_radius_m" type="double" value="$(arg object_max_accepted_radius_m)" />
+    <rosparam param="class_names" subst_value="true">$(arg class_names)</rosparam>
 
     <node pkg="yolo26_ros" name="segment" type="segment" output="screen" />
 </launch>

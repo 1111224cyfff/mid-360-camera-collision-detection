@@ -1,11 +1,12 @@
 warning_evaluator:
   visual_objects_topic: /segment/object_states
   cylinder_objects_topic: /warning/cylinder_object_states
-  monitored_source_mode: visual
+  monitored_source_mode: both
   dynamic_tracks_topic: /dynamic_tracker/track_states
   static_cloud_topic: /lio_sam/mapping/map_local
   warning_topic: /warning/state
   marker_topic: /warning/markers
+  visual_object_marker_topic: /warning/visual_object_markers
   output_frame: map
   cylinder_class_name: synthetic_cylinder
   default_cylinder_radius: 2.0
@@ -16,13 +17,17 @@ warning_evaluator:
   inside_cylinder_ignore_epsilon: 0.001
   dynamic_prediction_sample_dt: 0.1
 
-  monitored_class_names: [crane, exca-arm, exca-body]
+  monitored_class_names: [barrier, tower_crane_section]
 
   object_stale_timeout: 0.5
+  visual_hold_timeout: 1.0
   track_stale_timeout: 1.0
   static_cloud_stale_timeout: 1.0
-  enable_static_warning: false
+  evaluation_rate_hz: 10.0
+  enable_static_warning: true
   transform_timeout_sec: 0.05
+  visual_object_radius_margin_m: 0.15
+  static_warning_min_lift_height_m: 2.0
 
   min_object_confidence: 0.35
   min_object_points: 25
@@ -37,10 +42,19 @@ warning_evaluator:
   max_object_velocity_dt: 0.5
   downgrade_hold_sec: 1.0
   publish_markers: true
+  visual_object_marker_lifetime_sec: 0.0
+  visual_object_envelope_fill_alpha: 0.35
+  visual_object_envelope_draw_outline: false
+  visual_object_envelope_outline_alpha: 0.95
+  visual_object_envelope_outline_width_m: 0.08
+  visual_object_envelope_outline_segments: 72
 
   static_notice_clearance: 2.5
   static_warning_clearance: 1.5
   static_emergency_clearance: 0.8
+  static_notice_min_points: 3
+  static_warning_min_points: 5
+  static_emergency_min_points: 8
 
   dynamic_notice_clearance: 2.0
   dynamic_warning_clearance: 1.2

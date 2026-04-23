@@ -73,7 +73,7 @@ Visualization Manager:
       Queue Size: 10
       Selectable: true
       Size (Pixels): 3
-      Size (m): 0.05000000074505806
+      Size (m): 0.2
       Style: Flat Squares
       Topic: /merged_pointcloud
       Unreliable: false
@@ -112,7 +112,7 @@ Visualization Manager:
   Global Options:
     Background Color: 48; 48; 48
     Default Light: true
-    Fixed Frame: body
+    Fixed Frame: body_leveled
     Frame Rate: 30
   Name: root
   Tools:

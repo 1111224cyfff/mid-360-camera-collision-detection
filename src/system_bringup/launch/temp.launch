@@ -1,7 +1,7 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section.bag" />
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section_0_30s.bag" />
 
   <arg name="detector_rviz" default="false" />
   <arg name="lio_sam_rviz" default="false" />
@@ -9,7 +9,7 @@
   <arg name="segment_rviz" default="true" />
   <arg name="launch_rviz" default="$(arg segment_rviz)" />
   <arg name="livox_merge_rviz" default="false" />
-  <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
+  <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup_temp.rviz" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
   <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
   <arg name="leveler_calib_duration_sec" default="1.0" />
@@ -25,6 +25,7 @@
   <arg name="near_field_roi_xy_radius" default="10.0" />
 
   <arg name="segment_raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
+  <arg name="original_image_topic" default="/hikrobot_camera/rgb/compressed" />
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
@@ -44,6 +45,12 @@
   <!-- 只保留圆柱动态预警；关闭 visual 静态距离预警。 -->
   <arg name="warning_source_mode" default="cylinder" />
   <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
+  <arg name="enable_image_export" default="true" />
+  <arg name="image_export_dir" default="/home/nvidia/ws_livox/temp" />
+  <!-- 30s 切分包下尽早导出，避免超过回放窗口导致无输出。 -->
+  <arg name="image_export_start_sec" default="2" />
+  <arg name="image_export_duration_sec" default="20" />
+  <arg name="image_export_sec_per_frame" default="0.1" />
 
   <!-- 启动相机 tf 转换。body_leveled 由 leveler 在 rosbag 回放开始后约 1s 标定完成后发布。 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
@@ -136,6 +143,37 @@
       <arg name="tf_lookup_timeout_sec" value="$(arg segment_tf_lookup_timeout_sec)" />
       <arg name="object_radius_padding_m" value="$(arg segment_object_radius_padding_m)" />
     </include>
+  </group>
+
+    <!-- 导出 2s~22s 区间图像（文件名带每帧时间戳）：Original / Raw / Segment / Projected -->
+  <group if="$(arg enable_image_export)">
+      <node pkg="system_bringup"
+        type="topic_image_timestamp_saver.py"
+        args="--topic $(arg original_image_topic) --output_dir $(arg image_export_dir) --prefix original_camera --interval $(arg image_export_sec_per_frame)"
+        name="export_original_camera_images"
+        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
+        output="screen" />
+
+      <node pkg="system_bringup"
+        type="topic_image_timestamp_saver.py"
+          name="export_raw_camera_images"
+        args="--topic $(arg segment_raw_image_topic) --output_dir $(arg image_export_dir) --prefix raw_camera --interval $(arg image_export_sec_per_frame)"
+        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
+        output="screen" />
+
+      <node pkg="system_bringup"
+        type="topic_image_timestamp_saver.py"
+          name="export_segment_overlay_images"
+        args="--topic $(arg segment_result_topic) --output_dir $(arg image_export_dir) --prefix segment_overlay --interval $(arg image_export_sec_per_frame)"
+        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
+        output="screen" />
+
+      <node pkg="system_bringup"
+        type="topic_image_timestamp_saver.py"
+          name="export_projected_pc_images"
+        args="--topic $(arg segment_result_pc_topic) --output_dir $(arg image_export_dir) --prefix projected_pc --interval $(arg image_export_sec_per_frame)"
+        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
+        output="screen" />
   </group>
 
   <node pkg="rviz"

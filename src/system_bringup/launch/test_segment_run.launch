@@ -1,7 +1,7 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia_2.bag" />
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section.bag" />
   <arg name="detector_rviz" default="true" />
   <arg name="camera_frame_transform_delay_sec" default="3" />
   <arg name="enable_pointcloud_downsample" default="true" />

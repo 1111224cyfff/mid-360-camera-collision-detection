@@ -1,6 +1,7 @@
 <launch>
   <arg name="input_topic" default="/hikrobot_camera/rgb/compressed" />
   <arg name="output_topic" default="/hikrobot_camera/rgb/leveled/compressed" />
+  <arg name="use_compressed_image" default="true" />
   <arg name="source_frame" default="hikrobot_camera" />
   <arg name="parent_frame" default="body_leveled" />
   <arg name="output_frame" default="hikrobot_camera_leveled" />
@@ -16,6 +17,7 @@
     <rosparam command="load" file="$(find hikrobot_camera)/config/camera_frame_transform.yaml" />
     <param name="input_topic" value="$(arg input_topic)" />
     <param name="output_topic" value="$(arg output_topic)" />
+    <param name="use_compressed_image" value="$(arg use_compressed_image)" />
     <param name="source_frame" value="$(arg source_frame)" />
     <param name="parent_frame" value="$(arg parent_frame)" />
     <param name="output_frame" value="$(arg output_frame)" />

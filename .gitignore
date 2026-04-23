@@ -45,3 +45,6 @@ data/
 
 #
 temp.txt
+
+*.txt
+*.log

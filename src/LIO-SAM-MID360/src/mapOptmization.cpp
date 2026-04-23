@@ -1,8 +1,10 @@
 #include "utility.h"
 #include "lio_sam/cloud_info.h"
 #include "lio_sam/save_map.h"
+#include "lio_sam/SegmentedObjectStateArray.h"
 
 #include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/PoseStamped.h>
 
 #include <pcl/segmentation/extract_clusters.h>
 #include <pcl/search/kdtree.h>
@@ -91,6 +93,7 @@ public:
     ros::Subscriber subCloud;
     ros::Subscriber subGPS;
     ros::Subscriber subLoop;
+    ros::Subscriber subSelectedVisualObjects;
 
     ros::ServiceServer srvSaveMap;
 
@@ -146,6 +149,21 @@ public:
 
     std::mutex mtx;
     std::mutex mtxLoopInfo;
+    std::mutex mtxSelectedObjectMask;
+
+    struct ExclusionSphere
+    {
+        geometry_msgs::Point center;
+        double radius{0.0};
+        ros::Time stamp;
+    };
+
+    std::deque<ExclusionSphere> selectedObjectMaskHistory;
+    bool selectedObjectMapFilterEnable = true;
+    std::string selectedObjectMapFilterTopic;
+    double selectedObjectMapFilterHistoryDurationSec = 2.5;
+    double selectedObjectMapFilterRadiusPaddingM = 0.35;
+    double selectedObjectMapFilterMinRadiusM = 0.20;
 
     bool isDegenerate = false;
     cv::Mat matP;
@@ -190,6 +208,21 @@ public:
         subGPS   = nh.subscribe<nav_msgs::Odometry> (gpsTopic, 200, &mapOptimization::gpsHandler, this, ros::TransportHints().tcpNoDelay());
         subLoop  = nh.subscribe<std_msgs::Float64MultiArray>("lio_loop/loop_closure_detection", 1, &mapOptimization::loopInfoHandler, this, ros::TransportHints().tcpNoDelay());
 
+        nh.param<bool>("lio_sam/selected_object_map_filter/enabled", selectedObjectMapFilterEnable, true);
+        nh.param<std::string>("lio_sam/selected_object_map_filter/objects_topic", selectedObjectMapFilterTopic, std::string("/warning/selected_visual_object_states"));
+        nh.param<double>("lio_sam/selected_object_map_filter/history_duration_sec", selectedObjectMapFilterHistoryDurationSec, 2.5);
+        nh.param<double>("lio_sam/selected_object_map_filter/radius_padding_m", selectedObjectMapFilterRadiusPaddingM, 0.35);
+        nh.param<double>("lio_sam/selected_object_map_filter/min_radius_m", selectedObjectMapFilterMinRadiusM, 0.20);
+        if (selectedObjectMapFilterEnable && !selectedObjectMapFilterTopic.empty())
+        {
+            subSelectedVisualObjects = nh.subscribe<lio_sam::SegmentedObjectStateArray>(
+                selectedObjectMapFilterTopic,
+                3,
+                &mapOptimization::selectedVisualObjectsHandler,
+                this,
+                ros::TransportHints().tcpNoDelay());
+        }
+
         srvSaveMap  = nh.advertiseService("lio_sam/save_map", &mapOptimization::saveMapService, this);
 
         pubHistoryKeyFrames   = nh.advertise<sensor_msgs::PointCloud2>("lio_sam/mapping/icp_loop_closure_history_cloud", 1);
@@ -218,6 +251,12 @@ public:
         trackingToLidar.setIdentity();
         activeTrackingFrame = trackingFrame;
         trackingToLidarReady = (activeTrackingFrame == lidarFrame);
+
+        ROS_INFO_STREAM("[mapOptimization] selected_object_map_filter enabled=" << (selectedObjectMapFilterEnable ? "true" : "false")
+                        << " topic=" << selectedObjectMapFilterTopic
+                        << " history_duration_sec=" << selectedObjectMapFilterHistoryDurationSec
+                        << " radius_padding_m=" << selectedObjectMapFilterRadiusPaddingM
+                        << " min_radius_m=" << selectedObjectMapFilterMinRadiusM);
     }
 
     std::string resolveTrackingFrame(const std::string& frame_id) const
@@ -298,6 +337,181 @@ public:
         *mapLocal += *laserCloudCornerFromMapDS;
         *mapLocal += *laserCloudSurfFromMapDS;
         return mapLocal;
+    }
+
+    bool transformPoseToFrame(
+        const geometry_msgs::Pose& source_pose,
+        const std::string& source_frame,
+        const std::string& target_frame,
+        const ros::Time& stamp,
+        geometry_msgs::Pose* transformed_pose)
+    {
+        if (!transformed_pose)
+            return false;
+
+        if (source_frame.empty() || target_frame.empty() || source_frame == target_frame)
+        {
+            *transformed_pose = source_pose;
+            return true;
+        }
+
+        geometry_msgs::PoseStamped source_stamped;
+        source_stamped.header.stamp = stamp;
+        source_stamped.header.frame_id = source_frame;
+        source_stamped.pose = source_pose;
+
+        geometry_msgs::PoseStamped target_stamped;
+        try
+        {
+            tfListener.waitForTransform(target_frame, source_frame, stamp, ros::Duration(0.05));
+            tfListener.transformPose(target_frame, source_stamped, target_stamped);
+            *transformed_pose = target_stamped.pose;
+            return true;
+        }
+        catch (tf::TransformException&)
+        {
+        }
+
+        try
+        {
+            source_stamped.header.stamp = ros::Time(0);
+            tfListener.waitForTransform(target_frame, source_frame, ros::Time(0), ros::Duration(0.05));
+            tfListener.transformPose(target_frame, source_stamped, target_stamped);
+            *transformed_pose = target_stamped.pose;
+            return true;
+        }
+        catch (tf::TransformException& ex)
+        {
+            ROS_WARN_THROTTLE(
+                2.0,
+                "[mapOptimization] Failed to transform selected object pose from %s to %s: %s",
+                source_frame.c_str(),
+                target_frame.c_str(),
+                ex.what());
+            return false;
+        }
+    }
+
+    double selectedObjectMaskRadius(const lio_sam::SegmentedObjectState& object) const
+    {
+        double radius = 0.0;
+        if (object.footprint_radius > 1e-3f)
+            radius = std::max(radius, static_cast<double>(object.footprint_radius));
+        if (object.bounding_radius > 1e-3f)
+            radius = std::max(radius, static_cast<double>(object.bounding_radius));
+
+        const double size_x = static_cast<double>(object.size.x);
+        const double size_y = static_cast<double>(object.size.y);
+        const double size_z = static_cast<double>(object.size.z);
+        const double from_size = 0.5 * std::sqrt(size_x * size_x + size_y * size_y + size_z * size_z);
+        radius = std::max(radius, from_size);
+        return std::max(selectedObjectMapFilterMinRadiusM, radius + std::max(0.0, selectedObjectMapFilterRadiusPaddingM));
+    }
+
+    void pruneSelectedObjectMaskHistoryLocked(const ros::Time& reference_stamp)
+    {
+        if (selectedObjectMapFilterHistoryDurationSec <= 1e-6)
+        {
+            if (selectedObjectMaskHistory.size() > 1)
+            {
+                const ExclusionSphere latest = selectedObjectMaskHistory.back();
+                selectedObjectMaskHistory.clear();
+                selectedObjectMaskHistory.push_back(latest);
+            }
+            return;
+        }
+
+        while (!selectedObjectMaskHistory.empty())
+        {
+            const double age_sec = (reference_stamp - selectedObjectMaskHistory.front().stamp).toSec();
+            if (age_sec <= selectedObjectMapFilterHistoryDurationSec)
+                break;
+            selectedObjectMaskHistory.pop_front();
+        }
+    }
+
+    void selectedVisualObjectsHandler(const lio_sam::SegmentedObjectStateArrayConstPtr& msg)
+    {
+        if (!selectedObjectMapFilterEnable || !msg)
+            return;
+
+        const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
+        std::lock_guard<std::mutex> lock(mtxSelectedObjectMask);
+        pruneSelectedObjectMaskHistoryLocked(stamp);
+
+        if (msg->objects.empty())
+            return;
+
+        geometry_msgs::Pose pose_in_odom;
+        if (!transformPoseToFrame(msg->objects.front().pose, msg->header.frame_id, odometryFrame, stamp, &pose_in_odom))
+            return;
+
+        ExclusionSphere sphere;
+        sphere.center = pose_in_odom.position;
+        sphere.radius = selectedObjectMaskRadius(msg->objects.front());
+        sphere.stamp = stamp;
+        selectedObjectMaskHistory.push_back(sphere);
+        pruneSelectedObjectMaskHistoryLocked(stamp);
+    }
+
+    std::vector<ExclusionSphere> selectedObjectMaskHistorySnapshot(const ros::Time& reference_stamp)
+    {
+        std::lock_guard<std::mutex> lock(mtxSelectedObjectMask);
+        pruneSelectedObjectMaskHistoryLocked(reference_stamp);
+        return std::vector<ExclusionSphere>(selectedObjectMaskHistory.begin(), selectedObjectMaskHistory.end());
+    }
+
+    bool pointInsideExclusionSphere(const PointType& point, const ExclusionSphere& sphere) const
+    {
+        const double dx = static_cast<double>(point.x) - sphere.center.x;
+        const double dy = static_cast<double>(point.y) - sphere.center.y;
+        const double dz = static_cast<double>(point.z) - sphere.center.z;
+        return dx * dx + dy * dy + dz * dz <= sphere.radius * sphere.radius;
+    }
+
+    bool pointInsideExclusionSweep(const PointType& point, const ExclusionSphere& start, const ExclusionSphere& end) const
+    {
+        const double segment_x = end.center.x - start.center.x;
+        const double segment_y = end.center.y - start.center.y;
+        const double segment_z = end.center.z - start.center.z;
+        const double segment_length_sq = segment_x * segment_x + segment_y * segment_y + segment_z * segment_z;
+        if (segment_length_sq <= 1e-9)
+            return false;
+
+        const double point_x = static_cast<double>(point.x) - start.center.x;
+        const double point_y = static_cast<double>(point.y) - start.center.y;
+        const double point_z = static_cast<double>(point.z) - start.center.z;
+        const double projection = point_x * segment_x + point_y * segment_y + point_z * segment_z;
+        const double t = std::max(0.0, std::min(1.0, projection / segment_length_sq));
+
+        const double closest_x = start.center.x + t * segment_x;
+        const double closest_y = start.center.y + t * segment_y;
+        const double closest_z = start.center.z + t * segment_z;
+        const double radius = std::max(start.radius, end.radius);
+
+        const double dx = static_cast<double>(point.x) - closest_x;
+        const double dy = static_cast<double>(point.y) - closest_y;
+        const double dz = static_cast<double>(point.z) - closest_z;
+        return dx * dx + dy * dy + dz * dz <= radius * radius;
+    }
+
+    bool pointInsideSelectedObjectMask(const PointType& point, const std::vector<ExclusionSphere>& history) const
+    {
+        for (const auto& sphere : history)
+        {
+            if (pointInsideExclusionSphere(point, sphere))
+                return true;
+        }
+
+        if (history.size() < 2)
+            return false;
+
+        for (size_t index = 1; index < history.size(); ++index)
+        {
+            if (pointInsideExclusionSweep(point, history[index - 1], history[index]))
+                return true;
+        }
+        return false;
     }
 
     void extractDynamicWithConfidence(
@@ -2006,6 +2220,9 @@ public:
         // Optional: exclude dynamic points from being written into the map.
         // This helps avoid moving objects becoming part of the static map, which would later cause false negatives.
         const bool filterForMap = dynamicPointEnable && dynamicExcludeFromMap;
+        const auto selectedObjectMaskHistorySnapshotCopy = selectedObjectMapFilterEnable
+            ? selectedObjectMaskHistorySnapshot(timeLaserInfoStamp)
+            : std::vector<ExclusionSphere>();
         auto mapLocal = filterForMap ? buildLocalMapCloud() : pcl::PointCloud<PointType>::Ptr();
 
         if (!filterForMap || !mapLocal || mapLocal->empty())
@@ -2036,6 +2253,12 @@ public:
                 {
                     PointType ptMap;
                     pointAssociateToMap(const_cast<PointType*>(&ptOri), &ptMap);
+
+                    if (!selectedObjectMaskHistorySnapshotCopy.empty()
+                        && pointInsideSelectedObjectMask(ptMap, selectedObjectMaskHistorySnapshotCopy))
+                    {
+                        continue;
+                    }
 
                     const float r = pointDistance(ptMap);
                     if (dynamicMaxRange > 0.0f && r > dynamicMaxRange)

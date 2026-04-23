@@ -1,0 +1,14 @@
+visual_object_selector:
+  input_objects_topic: /segment/object_states
+  output_topic: /warning/selected_visual_object_states
+  selected_class_names: [tower_crane_section, barrier]
+  min_object_confidence: 0.35
+  min_object_points: 25
+  radius_smoothing_alpha: 0.6
+  max_radius_growth_per_frame_m: 0.15
+  large_expansion_confirm_delta_m: 0.3
+  large_expansion_confirm_frames: 3
+  large_expansion_match_tolerance_m: 0.15
+  absolute_max_radius_m: 0.0
+  target_match_position_tolerance_m: 1.5
+  target_match_range_tolerance_m: 1.0

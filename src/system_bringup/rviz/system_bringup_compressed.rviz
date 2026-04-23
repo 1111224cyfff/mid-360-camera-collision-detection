@@ -119,7 +119,7 @@ Visualization Manager:
           Min Intensity: 0
           Name: Colored Point Cloud
           Position Transformer: XYZ
-          Queue Size: 5
+          Queue Size: 10
           Selectable: true
           Size (Pixels): 4
           Size (m): 0.03999999910593033
@@ -170,7 +170,7 @@ Visualization Manager:
           Name: Raw Camera
           Normalize Range: true
           Queue Size: 1
-          Transport Hint: raw
+          Transport Hint: compressed
           Unreliable: false
           Value: true
         - Class: rviz/Image
@@ -212,7 +212,7 @@ Visualization Manager:
           Class: rviz/PointCloud2
           Color: 255; 255; 255
           Color Transformer: Intensity
-          Decay Time: 300
+          Decay Time: 5
           Enabled: true
           Invert Rainbow: false
           Max Color: 255; 255; 255
@@ -221,7 +221,7 @@ Visualization Manager:
           Min Intensity: 0
           Name: Map (cloud)
           Position Transformer: XYZ
-          Queue Size: 10
+          Queue Size: 2
           Selectable: false
           Size (Pixels): 1
           Size (m): 0.009999999776482582

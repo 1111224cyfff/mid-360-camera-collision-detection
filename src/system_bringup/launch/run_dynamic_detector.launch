@@ -1,7 +1,7 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
-  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia_2.bag" />
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section.bag" />
   <arg name="detector_rviz" default="true" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
   <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
@@ -37,7 +37,9 @@
       args="0 0 0 0 0 0 base_link body" />
 
   <!-- 启动 LIO-SAM (6-axis) -->
-  <include file="$(find lio_sam)/launch/run6axis.launch" />
+  <include file="$(find lio_sam)/launch/run6axis.launch">
+    <arg name="use_accel_tilt_for_6axis" value="false" />
+  </include>
 
   <!-- 启动 M-detector (MID360) -->
   <include file="$(find m_detector)/launch/detector_mid360_lio_sam.launch">

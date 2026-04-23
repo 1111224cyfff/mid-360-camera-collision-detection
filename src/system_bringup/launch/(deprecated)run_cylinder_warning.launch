@@ -1,0 +1,95 @@
+<launch>
+  <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section.bag" />
+
+  <arg name="detector_rviz" default="false" />
+  <arg name="lio_sam_rviz" default="false" />
+  <arg name="launch_rviz" default="true" />
+  <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup_cylinder_warning.rviz" />
+  <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免告警链路长时间无输入。 -->
+  <arg name="leveler_calib_duration_sec" default="1.0" />
+  <arg name="leveler_min_imu_samples" default="200" />
+  <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
+
+  <!-- body_leveled 仍保持车体系水平化；告警链路保持原有 odom/map 世界系。 -->
+  <arg name="odometry_frame" default="odom" />
+  <arg name="world_frame" default="map" />
+
+  <arg name="enable_warning_evaluator" default="true" />
+  <arg name="enable_warning_controller" default="true" />
+  <arg name="enable_cylinder_object_source" default="true" />
+  <arg name="warning_source_mode" default="cylinder" />
+  <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
+
+  <!-- 启动 Livox merge -->
+  <include file="$(find livox_merge)/launch/livox_merge.launch" />
+
+  <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
+  <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch">
+    <arg name="calib_duration_sec" value="$(arg leveler_calib_duration_sec)" />
+    <arg name="min_imu_samples" value="$(arg leveler_min_imu_samples)" />
+    <arg name="calib_max_gyro_norm_rad_s" value="$(arg leveler_calib_max_gyro_norm_rad_s)" />
+  </include>
+
+  <!-- merged_livox 的原始输出 frame 是 body，这里显式声明 body 与 base_link 重合。 -->
+  <node pkg="tf2_ros"
+        type="static_transform_publisher"
+        name="base_to_body_tf"
+        args="0 0 0 0 0 0 base_link body" />
+
+  <!-- 启动 LIO-SAM (6-axis) -->
+  <include file="$(find lio_sam)/launch/run6axis.launch">
+    <arg name="launch_rviz" value="$(arg lio_sam_rviz)" />
+  </include>
+
+  <!-- 启动 M-detector (MID360) -->
+  <include file="$(find m_detector)/launch/detector_mid360_lio_sam.launch">
+    <arg name="rviz" value="$(arg detector_rviz)" />
+    <arg name="rviz_node_name" value="m_detector_rviz" />
+    <arg name="odometry_frame" value="$(arg odometry_frame)" />
+    <arg name="world_frame" value="$(arg world_frame)" />
+  </include>
+
+  <!-- 启动 dynamic tracker -->
+  <include file="$(find lio_sam)/launch/dynamic_tracker.launch">
+    <arg name="output_frame" value="$(arg world_frame)" />
+  </include>
+
+  <group if="$(arg enable_warning_evaluator)">
+    <include file="$(find lio_sam)/launch/visual_object_selector.launch">
+      <arg name="output_topic" value="$(arg selected_visual_objects_topic)" />
+    </include>
+
+    <group if="$(arg enable_cylinder_object_source)">
+      <include file="$(find lio_sam)/launch/cylinder_object_source.launch">
+        <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+      </include>
+    </group>
+
+    <include file="$(find lio_sam)/launch/warning_evaluator.launch">
+      <arg name="output_frame" value="$(arg world_frame)" />
+      <arg name="monitored_source_mode" value="$(arg warning_source_mode)" />
+      <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+    </include>
+  </group>
+
+  <group if="$(arg enable_warning_controller)">
+    <include file="$(find lio_sam)/launch/warning_controller.launch" />
+  </group>
+
+  <node pkg="rviz"
+        type="rviz"
+        name="cylinder_warning_rviz"
+        args="-d $(arg rviz_config)"
+        if="$(arg launch_rviz)"
+        output="screen" />
+
+  <!-- 固定 rosbag 播放（延时 1 秒，确保订阅者就绪）。 -->
+  <node pkg="rosbag"
+        type="play"
+        name="rosbag_play"
+        args="$(arg bag_file)"
+        launch-prefix="bash -c 'sleep 1; exec $0 $@'"
+        output="screen" />
+</launch>

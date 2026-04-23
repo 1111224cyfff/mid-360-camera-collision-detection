@@ -16,7 +16,7 @@ roslaunch hikrobot_camera hikrobot_camera.launch
 ```
 
 # camera frame transform
-Republish `/hikrobot_camera/rgb/compressed` to a new compressed-image topic with a new `frame_id`, and publish the corresponding static extrinsic transform.
+Republish either raw or compressed camera images to a new topic with a new `frame_id`, and publish the corresponding static extrinsic transform.
 Preferred launch:
 ```
 source ./devel/setup.bash
@@ -26,6 +26,8 @@ Enable from the camera launches with:
 ```
 roslaunch hikrobot_camera hikrobot_camera_indoor.launch enable_camera_frame_transform:=true
 ```
+
+Set `use_compressed_image:=false` when the input topic is `sensor_msgs/Image`, for example when replaying raw-image rosbags.
 
 # camera lidar alignment audit
 Use this audit node to verify that the republished image frame, the leveled point cloud frame, and the runtime TF chain are mutually consistent.

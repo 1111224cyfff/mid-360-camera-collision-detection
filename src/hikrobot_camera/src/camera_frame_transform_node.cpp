@@ -9,6 +9,7 @@
 #include <opencv2/core.hpp>
 #include <ros/ros.h>
 #include <sensor_msgs/CompressedImage.h>
+#include <sensor_msgs/Image.h>
 #include <tf2/LinearMath/Matrix3x3.h>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/buffer.h>
@@ -21,6 +22,7 @@ public:
         : nh_(), pnh_("~") {
         pnh_.param<std::string>("input_topic", input_topic_, std::string("/hikrobot_camera/rgb/compressed"));
         pnh_.param<std::string>("output_topic", output_topic_, std::string("/hikrobot_camera/rgb/leveled/compressed"));
+        pnh_.param<bool>("use_compressed_image", use_compressed_image_, true);
         pnh_.param<std::string>("source_frame", source_frame_, std::string("hikrobot_camera"));
         pnh_.param<std::string>("parent_frame", parent_frame_, std::string("body_leveled"));
         pnh_.param<std::string>("extrinsic_parent_frame", extrinsic_parent_frame_, std::string("body"));
@@ -39,8 +41,13 @@ public:
             tf_listener_.reset(new tf2_ros::TransformListener(*tf_buffer_));
         }
 
-        image_pub_ = nh_.advertise<sensor_msgs::CompressedImage>(output_topic_, 1);
-        image_sub_ = nh_.subscribe(input_topic_, 1, &CameraFrameTransformNode::imageCallback, this);
+        if (use_compressed_image_) {
+            image_pub_ = nh_.advertise<sensor_msgs::CompressedImage>(output_topic_, 1);
+            image_sub_ = nh_.subscribe(input_topic_, 1, &CameraFrameTransformNode::compressedImageCallback, this);
+        } else {
+            image_pub_ = nh_.advertise<sensor_msgs::Image>(output_topic_, 1);
+            image_sub_ = nh_.subscribe(input_topic_, 1, &CameraFrameTransformNode::rawImageCallback, this);
+        }
 
         if (publish_static_tf_) {
             tryPublishStaticTransform();
@@ -48,6 +55,7 @@ public:
 
         ROS_INFO_STREAM("camera_frame_transform ready: input_topic=" << input_topic_
                         << " output_topic=" << output_topic_
+                        << " use_compressed_image=" << (use_compressed_image_ ? "true" : "false")
                         << " source_frame=" << source_frame_
                         << " parent_frame=" << parent_frame_
                         << " extrinsic_parent_frame=" << extrinsic_parent_frame_
@@ -57,12 +65,22 @@ public:
     }
 
 private:
-    void imageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
+    void compressedImageCallback(const sensor_msgs::CompressedImageConstPtr& msg) {
         if (publish_static_tf_ && !static_tf_published_) {
             tryPublishStaticTransform();
         }
 
         sensor_msgs::CompressedImage out = *msg;
+        out.header.frame_id = output_frame_;
+        image_pub_.publish(out);
+    }
+
+    void rawImageCallback(const sensor_msgs::ImageConstPtr& msg) {
+        if (publish_static_tf_ && !static_tf_published_) {
+            tryPublishStaticTransform();
+        }
+
+        sensor_msgs::Image out = *msg;
         out.header.frame_id = output_frame_;
         image_pub_.publish(out);
     }
@@ -176,6 +194,7 @@ private:
 
     std::string input_topic_;
     std::string output_topic_;
+    bool use_compressed_image_ = true;
     std::string source_frame_;
     std::string parent_frame_;
     std::string extrinsic_parent_frame_;

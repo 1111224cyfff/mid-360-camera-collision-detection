@@ -103,6 +103,7 @@ public:
 
     // IMU
     int imuType;
+    bool useAccelTiltForSixAxis;
     float imuAccNoise;
     float imuGyrNoise;
     float imuAccBiasN;
@@ -224,6 +225,7 @@ public:
         }
 
         nh.param<int>("lio_sam/imuType", imuType, 0);
+        nh.param<bool>("lio_sam/use_accel_tilt_for_6axis", useAccelTiltForSixAxis, true);
 
         nh.param<int>("lio_sam/N_SCAN", N_SCAN, 16);
         nh.param<int>("lio_sam/Horizon_SCAN", Horizon_SCAN, 1800);
@@ -333,7 +335,26 @@ public:
 
     if (imuType == 0)
     {
-        q_final = extQRPY;
+        if (useAccelTiltForSixAxis)
+        {
+            constexpr double kMinAccelNorm = 1e-6;
+            const double acc_norm = acc.norm();
+            if (acc_norm > kMinAccelNorm)
+            {
+                const Eigen::Vector3d acc_unit = acc / acc_norm;
+                const double roll = std::atan2(acc_unit.y(), acc_unit.z());
+                const double pitch = std::atan2(-acc_unit.x(), std::sqrt(acc_unit.y() * acc_unit.y() + acc_unit.z() * acc_unit.z()));
+                q_final = Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) * Eigen::AngleAxisd(roll, Eigen::Vector3d::UnitX());
+            }
+            else
+            {
+                q_final = extQRPY;
+            }
+        }
+        else
+        {
+            q_final = extQRPY;
+        }
     }
     else if (imuType == 1)
     {

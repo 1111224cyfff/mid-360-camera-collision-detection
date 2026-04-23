@@ -1,0 +1,10 @@
+static_cloud_self_filter:
+  input_cloud_topic: /lio_sam/mapping/map_local
+  visual_objects_topic: /warning/selected_visual_object_states
+  output_topic: /warning/static_cloud_filtered
+  object_stale_timeout_sec: 0.5
+  history_duration_sec: 3.0
+  radius_margin_m: 0.35
+  min_object_confidence: 0.35
+  min_object_points: 25
+  min_object_radius_m: 0.05

@@ -18,6 +18,7 @@ install(DIRECTORY rviz/
 catkin_install_python(PROGRAMS
         scripts/adjust_bag_exposure.py
         scripts/img_exetract_with_time.py
+        scripts/topic_image_timestamp_saver.py
         DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 

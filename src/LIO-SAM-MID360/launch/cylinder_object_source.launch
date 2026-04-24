@@ -6,6 +6,8 @@
   <arg name="fixed_anchor_x" default="0.0"/>
   <arg name="fixed_anchor_y" default="0.0"/>
   <arg name="fixed_anchor_z" default="-3.0"/>
+  <arg name="ground_contact_mode" default="support_cloud"/>
+  <arg name="fixed_ground_z" default="0.0"/>
 
   <rosparam command="load" file="$(arg config)"/>
 
@@ -16,5 +18,7 @@
     <param name="fixed_anchor_x" value="$(arg fixed_anchor_x)"/>
     <param name="fixed_anchor_y" value="$(arg fixed_anchor_y)"/>
     <param name="fixed_anchor_z" value="$(arg fixed_anchor_z)"/>
+    <param name="ground_contact_mode" value="$(arg ground_contact_mode)"/>
+    <param name="fixed_ground_z" value="$(arg fixed_ground_z)"/>
   </node>
 </launch>

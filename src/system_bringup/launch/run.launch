@@ -42,9 +42,12 @@
   <arg name="enable_warning_evaluator" default="true" />
   <arg name="enable_warning_controller" default="true" />
   <arg name="enable_cylinder_object_source" default="true" />
+  <arg name="cylinder_ground_contact_mode" default="fixed_ground_z" />
+  <arg name="cylinder_fixed_ground_z" default="0.0" />
   <!-- 同时启用 visual 静态距离预警和圆柱动态预警。 -->
   <!-- 可选visual,cylinder,both -->
   <arg name="warning_source_mode" default="cylinder" />
+  <arg name="warning_static_cloud_source" default="map_local" />
   <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
 
   <!-- 启动相机 tf 转换。body_leveled 由 leveler 在 rosbag 回放开始后约 1s 标定完成后发布。 -->
@@ -106,6 +109,8 @@
     <group if="$(arg enable_cylinder_object_source)">
       <include file="$(find lio_sam)/launch/cylinder_object_source.launch">
         <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+        <arg name="ground_contact_mode" value="$(arg cylinder_ground_contact_mode)" />
+        <arg name="fixed_ground_z" value="$(arg cylinder_fixed_ground_z)" />
       </include>
     </group>
 
@@ -113,6 +118,7 @@
       <arg name="output_frame" value="$(arg world_frame)" />
       <arg name="monitored_source_mode" value="$(arg warning_source_mode)" />
       <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+      <arg name="static_cloud_source" value="$(arg warning_static_cloud_source)" />
     </include>
   </group>
 

@@ -4,16 +4,19 @@
   <arg name="output_frame" default="map"/>
   <arg name="monitored_source_mode" default="visual"/>
   <arg name="visual_objects_topic" default="/segment/object_states"/>
-  <arg name="static_cloud_topic" default="/lio_sam/mapping/map_local"/>
+  <arg name="static_cloud_source" default="map_local"/>
+  <arg name="map_static_cloud_topic" default="/lio_sam/mapping/map_local"/>
+  <arg name="deskewed_static_cloud_topic" default="/lio_sam/deskew/cloud_deskewed"/>
   <arg name="filtered_static_cloud_topic" default="/warning/static_cloud_filtered"/>
 
   <rosparam command="load" file="$(arg config)"/>
   <rosparam command="load" file="$(arg self_filter_config)"/>
 
   <node pkg="lio_sam" type="lio_sam_staticCloudSelfFilter" name="static_cloud_self_filter" output="screen" ns="/">
-    <param name="input_cloud_topic" value="$(arg static_cloud_topic)"/>
+    <param name="input_cloud_topic" value="$(eval arg('deskewed_static_cloud_topic') if arg('static_cloud_source') == 'deskew' else arg('map_static_cloud_topic'))"/>
     <param name="visual_objects_topic" value="$(arg visual_objects_topic)"/>
     <param name="output_topic" value="$(arg filtered_static_cloud_topic)"/>
+    <param name="history_duration_sec" value="$(eval 0.2 if arg('static_cloud_source') == 'deskew' else 3.0)"/>
   </node>
 
   <node pkg="lio_sam" type="lio_sam_warningEvaluator" name="warning_evaluator" output="screen" ns="/">

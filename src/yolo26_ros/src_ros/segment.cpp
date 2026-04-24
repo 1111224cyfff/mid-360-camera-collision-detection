@@ -24,6 +24,7 @@
 #include <algorithm>
 #include <cstdio>
 #include <xmlrpcpp/XmlRpcValue.h>
+#include <iomanip>
 
 // pcl headers
 #include <pcl/visualization/pcl_visualizer.h>
@@ -191,6 +192,124 @@ bool isPointInsideInstance(const cv::Mat& instanceMask, int x, int y)
         return false;
     }
     return instanceMask.at<uchar>(y, x) != 0;
+}
+
+cv::Mat createFullSizeMask(const cv::Size& image_size, const SegmentObject& obj)
+{
+    cv::Mat mask = cv::Mat::zeros(image_size, CV_8U);
+    if (obj.boxMask.empty() || obj.rect.width <= 0 || obj.rect.height <= 0) {
+        return mask;
+    }
+    const int x = static_cast<int>(obj.rect.x);
+    const int y = static_cast<int>(obj.rect.y);
+    const int w = obj.boxMask.cols;
+    const int h = obj.boxMask.rows;
+    if (x >= image_size.width || y >= image_size.height || x + w <= 0 || y + h <= 0) {
+        return mask;
+    }
+    int src_x = 0, src_y = 0;
+    int dst_x = x, dst_y = y;
+    int copy_w = w, copy_h = h;
+    if (dst_x < 0) { src_x = -dst_x; copy_w -= src_x; dst_x = 0; }
+    if (dst_y < 0) { src_y = -dst_y; copy_h -= src_y; dst_y = 0; }
+    if (dst_x + copy_w > image_size.width) { copy_w = image_size.width - dst_x; }
+    if (dst_y + copy_h > image_size.height) { copy_h = image_size.height - dst_y; }
+    if (copy_w > 0 && copy_h > 0) {
+        cv::Mat roi = mask(cv::Rect(dst_x, dst_y, copy_w, copy_h));
+        obj.boxMask(cv::Rect(src_x, src_y, copy_w, copy_h)).copyTo(roi);
+    }
+    return mask;
+}
+
+double computeMaskIoU(const cv::Mat& mask1, const cv::Mat& mask2)
+{
+    if (mask1.empty() || mask2.empty() || mask1.size() != mask2.size()) {
+        return 0.0;
+    }
+    cv::Mat intersection, union_mask;
+    cv::bitwise_and(mask1, mask2, intersection);
+    cv::bitwise_or(mask1, mask2, union_mask);
+    const double inter_area = static_cast<double>(cv::countNonZero(intersection));
+    const double union_area = static_cast<double>(cv::countNonZero(union_mask));
+    if (union_area < 1.0) {
+        return 0.0;
+    }
+    return inter_area / union_area;
+}
+
+template<typename T>
+double computeBboxIoU(const cv::Rect_<T>& a, const cv::Rect_<T>& b)
+{
+    const cv::Rect_<T> inter = a & b;
+    if (inter.area() <= 0) {
+        return 0.0;
+    }
+    const double inter_area = static_cast<double>(inter.area());
+    const double union_area = static_cast<double>(a.area()) + static_cast<double>(b.area()) - inter_area;
+    if (union_area < 1.0) {
+        return 0.0;
+    }
+    return inter_area / union_area;
+}
+
+cv::Point2f computeBboxCenter(const cv::Rect_<float>& rect)
+{
+    return cv::Point2f(rect.x + rect.width * 0.5f, rect.y + rect.height * 0.5f);
+}
+
+struct TemporalMetricState {
+    bool has_prev = false;
+    cv::Mat prev_full_mask;
+    cv::Rect_<float> prev_rect;
+    cv::Point2f prev_center;
+    float prev_conf = 0.0f;
+    int prev_label = -1;
+    size_t frame_counter = 0;
+    bool first_detected = false;
+    size_t first_detect_frame_idx = 0;
+    size_t miss_count = 0;
+    size_t max_consecutive_miss = 0;
+    size_t current_consecutive_miss = 0;
+    double tiou_sum = 0.0;
+    size_t tiou_count = 0;
+    double drift_sum = 0.0;
+    size_t drift_count = 0;
+};
+
+const SegmentObject* selectRepresentativeTarget(
+    const std::vector<SegmentObject>& objs,
+    const TemporalMetricState* prev_state)
+{
+    if (objs.empty()) {
+        return nullptr;
+    }
+    size_t best_idx = 0;
+    float best_conf = objs[0].prob;
+    for (size_t i = 1; i < objs.size(); ++i) {
+        if (objs[i].prob > best_conf) {
+            best_conf = objs[i].prob;
+            best_idx = i;
+        }
+    }
+    if (prev_state && prev_state->has_prev) {
+        std::vector<size_t> same_label_indices;
+        for (size_t i = 0; i < objs.size(); ++i) {
+            if (objs[i].label == prev_state->prev_label) {
+                same_label_indices.push_back(i);
+            }
+        }
+        if (same_label_indices.size() > 1) {
+            double best_iou = -1.0;
+            for (size_t idx : same_label_indices) {
+                const double iou = computeBboxIoU(objs[idx].rect, prev_state->prev_rect);
+                if (iou > best_iou) {
+                    best_iou = iou;
+                    best_idx = idx;
+                }
+            }
+        }
+    }
+    return &objs[best_idx];
 }
 
 std::string resolveClassName(const std::vector<std::string>& class_names, int class_id)
@@ -639,7 +758,8 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
     pcl::PointCloud<pcl::PointXYZRGB>::Ptr& colored_cloud,
     const ProjectionModel& projection_model,
     const ObjectCloudRefineSettings& refine_settings,
-    cv::Mat* projected_overlay_image)
+    cv::Mat* projected_overlay_image,
+    cv::Mat* pure_segmentation_image)
 {
     res = image.clone();
     cv::Mat mask = image.clone();
@@ -728,11 +848,26 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
             continue;
         }
         double sum_x = 0, sum_y = 0, sum_z = 0;
-        cv::Point2f rect_show_point2d;
         for (const auto& p : pc) {
             sum_x += p.x;
             sum_y += p.y;
             sum_z += p.z;
+        }
+        double cnt = static_cast<double>(pc.size());
+        object_centroids[i] = cv::Point3d(sum_x / cnt, sum_y / cnt, sum_z / cnt);
+    }
+
+    cv::addWeighted(res, 0.5, mask, 0.8, 1, res);
+    if (pure_segmentation_image) {
+        *pure_segmentation_image = res.clone();
+    }
+    for (size_t i = 0; i < objects_pointcloud.size(); ++i) {
+        const auto& pc = objects_pointcloud[i];
+        if (pc.empty()) {
+            continue;
+        }
+        cv::Point2f rect_show_point2d;
+        for (const auto& p : pc) {
             cv::Point2d img_pt_rec = projectToImagePlane(p, projection_model);
             if (!std::isfinite(img_pt_rec.x) || !std::isfinite(img_pt_rec.y)) {
                 continue;
@@ -741,11 +876,7 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
             rect_show_point2d.y = img_pt_rec.y;
             cv::circle(res, rect_show_point2d, 3, cv::Scalar(255, 255, 125), -1);
         }
-        double cnt = static_cast<double>(pc.size());
-        object_centroids[i] = cv::Point3d(sum_x / cnt, sum_y / cnt, sum_z / cnt);
     }
-
-    cv::addWeighted(res, 0.5, mask, 0.8, 1, res);
     if (projected_overlay_image) {
         *projected_overlay_image = res.clone();
         for (const auto& pt : projected_points) {
@@ -783,7 +914,7 @@ class RosNode
 {
 public:
     RosNode();
-    ~RosNode(){};
+    ~RosNode() { finalizeTemporalMetrics(); }
     void rawCallback(const sensor_msgs::ImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg);
     void compressedCallback(const sensor_msgs::CompressedImageConstPtr &msg, const sensor_msgs::PointCloud2ConstPtr &cloud_msg);
     void processFrame(const std_msgs::Header& image_header, const cv::Mat& image, const sensor_msgs::PointCloud2ConstPtr &cloud_msg);
@@ -811,9 +942,10 @@ private:
     std::shared_ptr<message_filters::Synchronizer<CompressedSyncPolicy>> compressed_sync_;
     ros::Publisher pub_img_;
     ros::Publisher pub_img_pc_;
+    ros::Publisher pub_pure_img_;
     ros::Publisher pub_color_cloud_;
     ros::Publisher pub_object_states_;
-    std::string topic_img_, topic_res_img_, weight_name_, topic_pointcloud_, topic_res_img_pc_, topic_object_states_;
+    std::string topic_img_, topic_res_img_, weight_name_, topic_pointcloud_, topic_res_img_pc_, topic_pure_img_, topic_object_states_;
     std::vector<std::string> class_names_;
     bool use_compressed_image_ = false;
     bool flip_lidar_y_for_projection_ = false;
@@ -840,6 +972,17 @@ private:
     bool enable_pointcloud_downsample_ = true;
     double pointcloud_leaf_size_m_ = 0.03;
     ObjectCloudRefineSettings object_cloud_refine_settings_;
+
+    bool enable_temporal_metrics_ = false;
+    double temporal_metrics_log_period_sec_ = 5.0;
+    std::string temporal_metrics_csv_path_;
+    ros::Time temporal_metrics_last_log_time_;
+    TemporalMetricState temporal_metric_state_;
+    std::ofstream temporal_metrics_csv_;
+
+    void updateTemporalMetrics(const cv::Size& image_size, const std::vector<SegmentObject>& objs);
+    void maybeLogTemporalMetrics();
+    void finalizeTemporalMetrics();
 
     bool tryBuildProjectionModelFromTf(
         const std::string& target_frame,
@@ -918,6 +1061,161 @@ void RosNode::recordAndMaybeLogPerf(
     stat_publish_ms_.reset();
     stat_sync_skew_s_.reset();
     perf_last_log_time_ = now;
+}
+
+void RosNode::updateTemporalMetrics(const cv::Size& image_size, const std::vector<SegmentObject>& objs)
+{
+    if (!enable_temporal_metrics_) {
+        return;
+    }
+
+    ++temporal_metric_state_.frame_counter;
+
+    const SegmentObject* rep = selectRepresentativeTarget(
+        objs, temporal_metric_state_.has_prev ? &temporal_metric_state_ : nullptr);
+
+    const bool detected = (rep != nullptr);
+
+    if (detected) {
+        if (!temporal_metric_state_.first_detected) {
+            temporal_metric_state_.first_detected = true;
+            temporal_metric_state_.first_detect_frame_idx = temporal_metric_state_.frame_counter;
+        }
+        temporal_metric_state_.current_consecutive_miss = 0;
+
+        cv::Mat full_mask = createFullSizeMask(image_size, *rep);
+        cv::Point2f center = computeBboxCenter(rep->rect);
+
+        double tiou = 0.0;
+        double drift = 0.0;
+        bool has_metrics = false;
+
+        if (temporal_metric_state_.has_prev) {
+            tiou = computeMaskIoU(temporal_metric_state_.prev_full_mask, full_mask);
+            const double dx = center.x - temporal_metric_state_.prev_center.x;
+            const double dy = center.y - temporal_metric_state_.prev_center.y;
+            drift = std::sqrt(dx * dx + dy * dy);
+
+            temporal_metric_state_.tiou_sum += tiou;
+            ++temporal_metric_state_.tiou_count;
+            temporal_metric_state_.drift_sum += drift;
+            ++temporal_metric_state_.drift_count;
+            has_metrics = true;
+        }
+
+        if (temporal_metrics_csv_.is_open()) {
+            temporal_metrics_csv_ << temporal_metric_state_.frame_counter << ",1,";
+            if (has_metrics) {
+                temporal_metrics_csv_ << std::fixed << std::setprecision(4) << tiou << "," << drift << "\n";
+            } else {
+                temporal_metrics_csv_ << ",\n";
+            }
+            temporal_metrics_csv_.flush();
+        }
+
+        temporal_metric_state_.prev_full_mask = full_mask.clone();
+        temporal_metric_state_.prev_rect = rep->rect;
+        temporal_metric_state_.prev_center = center;
+        temporal_metric_state_.prev_conf = rep->prob;
+        temporal_metric_state_.prev_label = rep->label;
+        temporal_metric_state_.has_prev = true;
+    } else {
+        if (temporal_metric_state_.first_detected) {
+            ++temporal_metric_state_.miss_count;
+            ++temporal_metric_state_.current_consecutive_miss;
+            temporal_metric_state_.max_consecutive_miss = std::max(
+                temporal_metric_state_.max_consecutive_miss,
+                temporal_metric_state_.current_consecutive_miss);
+        }
+
+        if (temporal_metrics_csv_.is_open()) {
+            temporal_metrics_csv_ << temporal_metric_state_.frame_counter << ",0,,\n";
+            temporal_metrics_csv_.flush();
+        }
+    }
+}
+
+void RosNode::maybeLogTemporalMetrics()
+{
+    if (!enable_temporal_metrics_) {
+        return;
+    }
+
+    const ros::Time now = ros::Time::now();
+    if (temporal_metrics_last_log_time_.isZero()) {
+        temporal_metrics_last_log_time_ = now;
+        return;
+    }
+
+    if ((now - temporal_metrics_last_log_time_).toSec() < temporal_metrics_log_period_sec_) {
+        return;
+    }
+
+    const double avg_tiou = temporal_metric_state_.tiou_count > 0
+        ? temporal_metric_state_.tiou_sum / static_cast<double>(temporal_metric_state_.tiou_count)
+        : 0.0;
+    const double avg_drift = temporal_metric_state_.drift_count > 0
+        ? temporal_metric_state_.drift_sum / static_cast<double>(temporal_metric_state_.drift_count)
+        : 0.0;
+
+    size_t eff_frames = 0;
+    double miss_rate = 0.0;
+    if (temporal_metric_state_.first_detected) {
+        eff_frames = temporal_metric_state_.frame_counter - temporal_metric_state_.first_detect_frame_idx + 1;
+        if (eff_frames > 0) {
+            miss_rate = static_cast<double>(temporal_metric_state_.miss_count) / static_cast<double>(eff_frames);
+        }
+    }
+
+    ROS_INFO(
+        "[temporal metrics] frames=%zu first_detect=%zu eff=%zu miss=%zu miss_rate=%.4f max_consecutive_miss=%zu avg_tiou=%.4f avg_drift=%.2fpx",
+        temporal_metric_state_.frame_counter,
+        temporal_metric_state_.first_detect_frame_idx,
+        eff_frames,
+        temporal_metric_state_.miss_count,
+        miss_rate,
+        temporal_metric_state_.max_consecutive_miss,
+        avg_tiou,
+        avg_drift);
+
+    temporal_metrics_last_log_time_ = now;
+}
+
+void RosNode::finalizeTemporalMetrics()
+{
+    if (!enable_temporal_metrics_) {
+        return;
+    }
+
+    if (temporal_metrics_csv_.is_open()) {
+        temporal_metrics_csv_.close();
+    }
+
+    const double avg_tiou = temporal_metric_state_.tiou_count > 0
+        ? temporal_metric_state_.tiou_sum / static_cast<double>(temporal_metric_state_.tiou_count)
+        : 0.0;
+    const double avg_drift = temporal_metric_state_.drift_count > 0
+        ? temporal_metric_state_.drift_sum / static_cast<double>(temporal_metric_state_.drift_count)
+        : 0.0;
+
+    size_t eff_frames = 0;
+    double miss_rate = 0.0;
+    if (temporal_metric_state_.first_detected) {
+        eff_frames = temporal_metric_state_.frame_counter - temporal_metric_state_.first_detect_frame_idx + 1;
+        if (eff_frames > 0) {
+            miss_rate = static_cast<double>(temporal_metric_state_.miss_count) / static_cast<double>(eff_frames);
+        }
+    }
+
+    ROS_INFO(
+        "[temporal metrics final] frames=%zu eff=%zu miss=%zu miss_rate=%.4f max_consecutive_miss=%zu avg_tiou=%.4f avg_drift=%.2fpx",
+        temporal_metric_state_.frame_counter,
+        eff_frames,
+        temporal_metric_state_.miss_count,
+        miss_rate,
+        temporal_metric_state_.max_consecutive_miss,
+        avg_tiou,
+        avg_drift);
 }
 
 bool RosNode::tryBuildProjectionModelFromTf(
@@ -1066,6 +1364,7 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
 
     const auto draw_start = std::chrono::steady_clock::now();
     cv::Mat image_to_show;
+    cv::Mat pure_segmentation;
     pointcloud_vec = drawSegmentObjects(
         image,
         img_res_,
@@ -1077,7 +1376,8 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
         colored_cloud,
         active_projection_model,
         object_cloud_refine_settings_,
-        &image_to_show);
+        &image_to_show,
+        &pure_segmentation);
     const auto draw_end = std::chrono::steady_clock::now();
 
     auto tc = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(infer_end - infer_start).count()) / 1000.;
@@ -1102,9 +1402,11 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
     const auto publish_start = std::chrono::steady_clock::now();
     sensor_msgs::ImagePtr msg_img_new = cv_bridge::CvImage(image_header, "bgr8", img_res_).toImageMsg();
     sensor_msgs::ImagePtr msg_img_new_pc = cv_bridge::CvImage(image_header, "bgr8", image_to_show).toImageMsg();
+    sensor_msgs::ImagePtr msg_pure_img = cv_bridge::CvImage(image_header, "bgr8", pure_segmentation).toImageMsg();
     ROS_DEBUG_THROTTLE(2.0, "Output Image Size: Width = %d, Height = %d", img_res_.cols, img_res_.rows);
     pub_img_pc_.publish(msg_img_new_pc);
     pub_img_.publish(msg_img_new);
+    pub_pure_img_.publish(msg_pure_img);
     pub_object_states_.publish(buildSegmentedObjectStateArray(
         current_cloud_header,
         objs_,
@@ -1126,6 +1428,8 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
     const double overlay_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(overlay_end - overlay_start).count()) / 1000.0;
     const double publish_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - publish_start).count()) / 1000.0;
     const double total_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - callback_start).count()) / 1000.0;
+    updateTemporalMetrics(image.size(), objs_);
+    maybeLogTemporalMetrics();
     recordAndMaybeLogPerf(total_ms, infer_ms, convert_ms, downsample_ms, tf_ms, draw_ms, overlay_ms, publish_ms, stamp_delta_sec);
 }
 
@@ -1139,6 +1443,7 @@ RosNode::RosNode()
     n_.param<std::string>("topic_pointcloud", topic_pointcloud_, "/livox/lidar");
     n_.param<std::string>("topic_res_img", topic_res_img_, "/detect/image_raw");
     n_.param<std::string>("topic_res_img_pc_", topic_res_img_pc_, "/detect/topic_res_img_pc_");
+    n_.param<std::string>("topic_pure_img", topic_pure_img_, "/segment/pure_image_raw");
     n_.param<std::string>("topic_object_states", topic_object_states_, "/segment/object_states");
     n_.param<std::string>("weight_name", weight_name_, "yolo26s-seg.engine");
     n_.param<std::string>("projection_config_path", projection_config_path_, projection_config_path_);
@@ -1162,6 +1467,9 @@ RosNode::RosNode()
     n_.param<int>("object_radius_outlier_min_support_points", object_cloud_refine_settings_.radius_outlier_min_support_points, object_cloud_refine_settings_.radius_outlier_min_support_points);
     n_.param<double>("object_radius_padding_m", object_cloud_refine_settings_.radius_padding_m, object_cloud_refine_settings_.radius_padding_m);
     n_.param<double>("object_max_accepted_radius_m", object_cloud_refine_settings_.max_accepted_radius_m, object_cloud_refine_settings_.max_accepted_radius_m);
+    n_.param<bool>("enable_temporal_metrics", enable_temporal_metrics_, enable_temporal_metrics_);
+    n_.param<double>("temporal_metrics_log_period_sec", temporal_metrics_log_period_sec_, temporal_metrics_log_period_sec_);
+    n_.param<std::string>("temporal_metrics_csv_path", temporal_metrics_csv_path_, temporal_metrics_csv_path_);
     class_names_ = readClassNamesParam(n_);
     engine_file_path_ = pkg_path_ + "/weights/" + weight_name_;
     projection_model_.loadFromFile(projection_config_path_);
@@ -1193,16 +1501,31 @@ RosNode::RosNode()
     std::cout << "\033[1;32m--obj_radius_outlier_support: " << object_cloud_refine_settings_.radius_outlier_min_support_points << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--obj_radius_padding: " << object_cloud_refine_settings_.radius_padding_m << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--obj_radius_abs_max: " << object_cloud_refine_settings_.max_accepted_radius_m << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--temporal_metrics   : " << (enable_temporal_metrics_ ? "true" : "false") << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--temporal_log_period: " << temporal_metrics_log_period_sec_ << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--temporal_csv_path  : " << temporal_metrics_csv_path_ << "\033[0m" << std::endl;
     if (class_names_.empty()) {
         ROS_WARN("No 'class_names' parameter provided. Falling back to generated labels like class0/class1.");
     } else {
         ROS_INFO("Loaded %zu class names from ROS parameter 'class_names'.", class_names_.size());
     }
 
+    if (enable_temporal_metrics_ && !temporal_metrics_csv_path_.empty()) {
+        temporal_metrics_csv_.open(temporal_metrics_csv_path_, std::ios::out | std::ios::trunc);
+        if (temporal_metrics_csv_.is_open()) {
+            temporal_metrics_csv_ << "frame_idx,has_detection,tiou,center_drift_px\n";
+            temporal_metrics_csv_.flush();
+            ROS_INFO("Temporal metrics CSV: %s", temporal_metrics_csv_path_.c_str());
+        } else {
+            ROS_WARN("Failed to open temporal metrics CSV: %s", temporal_metrics_csv_path_.c_str());
+        }
+    }
+
     detector_.reset(new YoloDetector(engine_file_path_));
 
     pub_img_pc_ = n_.advertise<sensor_msgs::Image>(topic_res_img_pc_, 10);
     pub_img_ = n_.advertise<sensor_msgs::Image>(topic_res_img_, 10);
+    pub_pure_img_ = n_.advertise<sensor_msgs::Image>(topic_pure_img_, 10);
     pub_color_cloud_ = n_.advertise<sensor_msgs::PointCloud2>("/colored_point_cloud", 10);
     pub_object_states_ = n_.advertise<lio_sam::SegmentedObjectStateArray>(topic_object_states_, 10);
 

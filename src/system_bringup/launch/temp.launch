@@ -1,19 +1,19 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
-  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/20260205/car-dynamic-hook-dynamic-1.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section_0_30s.bag" />
+  <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier.bag" /> -->
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section_raw.bag" />
 
+  <arg name="livox_merge_rviz" default="true" />
   <arg name="detector_rviz" default="false" />
   <arg name="lio_sam_rviz" default="false" />
   <arg name="enable_segment" default="true" />
   <arg name="segment_rviz" default="true" />
   <arg name="launch_rviz" default="$(arg segment_rviz)" />
-  <arg name="livox_merge_rviz" default="false" />
-  <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup_temp.rviz" />
+  <arg name="rviz_config" default="$(find system_bringup)/rviz/temp.rviz" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
   <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
-  <arg name="leveler_calib_duration_sec" default="1.0" />
-  <arg name="leveler_min_imu_samples" default="200" />
+  <arg name="leveler_calib_duration_sec" default="2.0" />
+  <arg name="leveler_min_imu_samples" default="600" />
   <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
 
   <!-- body_leveled 用于传感器侧水平化；LIO-SAM 与下游保持原有 odom/map 世界系。 -->
@@ -24,12 +24,13 @@
   <arg name="near_field_roi_frame" default="body_leveled" />
   <arg name="near_field_roi_xy_radius" default="10.0" />
 
+  <arg name="camera_raw_image_topic" default="/hikrobot_camera/rgb" />
   <arg name="segment_raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
-  <arg name="original_image_topic" default="/hikrobot_camera/rgb/compressed" />
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
-  <arg name="segment_weight_name" default="20260415.engine" />
+  <arg name="segment_pure_image_topic" default="/segment/pure_image_raw" />
+  <arg name="segment_weight_name" default="20260420.engine" />
   <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
   <arg name="segment_projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
   <arg name="segment_flip_lidar_y_for_projection" default="false" />
@@ -37,23 +38,27 @@
   <arg name="segment_log_rotated_grid" default="false" />
   <arg name="segment_sync_max_interval_sec" default="0.05" />
   <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
-  <arg name="segment_object_radius_padding_m" default="0.12" />
-  <arg name="segment_image_transport_in" default="compressed" />
+  <arg name="segment_object_radius_padding_m" default="0.2" />
+  <arg name="segment_enable_temporal_metrics" default="true" />
+  <arg name="segment_temporal_metrics_log_period_sec" default="5.0" />
+  <arg name="segment_temporal_metrics_csv_path" default="/home/nvidia/ws_livox/tmp/segment_metrics.csv" />
   <arg name="enable_warning_evaluator" default="true" />
   <arg name="enable_warning_controller" default="true" />
   <arg name="enable_cylinder_object_source" default="true" />
-  <!-- 只保留圆柱动态预警；关闭 visual 静态距离预警。 -->
+    <!-- 当前 tower_crane_section_raw.bag 中，map 系地面高度约在 -9.2m；
+      固定 ground_z 取这个量级，避免圆柱被 0.0 阈值整帧抑制。 -->
+  <arg name="cylinder_ground_contact_mode" default="fixed_ground_z" />
+    <arg name="cylinder_fixed_ground_z" default="-7.0" />
+  <!-- 同时启用 visual 静态距离预警和圆柱动态预警。 -->
   <arg name="warning_source_mode" default="cylinder" />
+  <arg name="warning_static_cloud_source" default="deskew" />
   <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
-  <arg name="enable_image_export" default="true" />
-  <arg name="image_export_dir" default="/home/nvidia/ws_livox/temp" />
-  <!-- 30s 切分包下尽早导出，避免超过回放窗口导致无输出。 -->
-  <arg name="image_export_start_sec" default="2" />
-  <arg name="image_export_duration_sec" default="20" />
-  <arg name="image_export_sec_per_frame" default="0.1" />
 
-  <!-- 启动相机 tf 转换。body_leveled 由 leveler 在 rosbag 回放开始后约 1s 标定完成后发布。 -->
+  <!-- 启动相机 tf 转换。raw 图像直接进入后续链路，不再经过压缩/解压重发。 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
+    <arg name="input_topic" value="$(arg camera_raw_image_topic)" />
+    <arg name="output_topic" value="$(arg segment_raw_image_topic)" />
+    <arg name="use_compressed_image" value="false" />
     <arg name="launch_prefix" value="bash -c 'sleep $(arg camera_frame_transform_delay_sec); exec $0 $@'" />
   </include>
 
@@ -106,6 +111,8 @@
     <group if="$(arg enable_cylinder_object_source)">
       <include file="$(find lio_sam)/launch/cylinder_object_source.launch">
         <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+        <arg name="ground_contact_mode" value="$(arg cylinder_ground_contact_mode)" />
+        <arg name="fixed_ground_z" value="$(arg cylinder_fixed_ground_z)" />
       </include>
     </group>
 
@@ -113,6 +120,7 @@
       <arg name="output_frame" value="$(arg world_frame)" />
       <arg name="monitored_source_mode" value="$(arg warning_source_mode)" />
       <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+      <arg name="static_cloud_source" value="$(arg warning_static_cloud_source)" />
     </include>
   </group>
 
@@ -120,20 +128,15 @@
     <include file="$(find lio_sam)/launch/warning_controller.launch" />
   </group>
 
-  <!-- 将 leveled 压缩图像还原为 raw，供分割节点直接订阅。 -->
   <group if="$(arg enable_segment)">
-    <node pkg="image_transport"
-          type="republish"
-          name="image_republish_leveled"
-          args="$(arg segment_image_transport_in) in:=$(arg segment_raw_image_topic) raw out:=$(arg segment_raw_image_topic)"
-          output="screen" />
-
-    <!-- 启动图像-点云分割投影。 -->
+    <!-- 启动图像-点云分割投影，直接订阅 leveled raw 图像。 -->
     <include file="$(arg segment_launch_file)">
       <arg name="topic_img" value="$(arg segment_raw_image_topic)" />
+      <arg name="use_compressed_image" value="false" />
       <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
       <arg name="topic_res_img" value="$(arg segment_result_topic)" />
       <arg name="topic_res_img_pc" value="$(arg segment_result_pc_topic)" />
+      <arg name="topic_pure_img" value="$(arg segment_pure_image_topic)" />
       <arg name="weight_name" value="$(arg segment_weight_name)" />
       <arg name="projection_config_path" value="$(arg segment_projection_config_path)" />
       <arg name="flip_lidar_y_for_projection" value="$(arg segment_flip_lidar_y_for_projection)" />
@@ -142,38 +145,10 @@
       <arg name="sync_max_interval_sec" value="$(arg segment_sync_max_interval_sec)" />
       <arg name="tf_lookup_timeout_sec" value="$(arg segment_tf_lookup_timeout_sec)" />
       <arg name="object_radius_padding_m" value="$(arg segment_object_radius_padding_m)" />
+      <arg name="enable_temporal_metrics" value="$(arg segment_enable_temporal_metrics)" />
+      <arg name="temporal_metrics_log_period_sec" value="$(arg segment_temporal_metrics_log_period_sec)" />
+      <arg name="temporal_metrics_csv_path" value="$(arg segment_temporal_metrics_csv_path)" />
     </include>
-  </group>
-
-    <!-- 导出 2s~22s 区间图像（文件名带每帧时间戳）：Original / Raw / Segment / Projected -->
-  <group if="$(arg enable_image_export)">
-      <node pkg="system_bringup"
-        type="topic_image_timestamp_saver.py"
-        args="--topic $(arg original_image_topic) --output_dir $(arg image_export_dir) --prefix original_camera --interval $(arg image_export_sec_per_frame)"
-        name="export_original_camera_images"
-        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
-        output="screen" />
-
-      <node pkg="system_bringup"
-        type="topic_image_timestamp_saver.py"
-          name="export_raw_camera_images"
-        args="--topic $(arg segment_raw_image_topic) --output_dir $(arg image_export_dir) --prefix raw_camera --interval $(arg image_export_sec_per_frame)"
-        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
-        output="screen" />
-
-      <node pkg="system_bringup"
-        type="topic_image_timestamp_saver.py"
-          name="export_segment_overlay_images"
-        args="--topic $(arg segment_result_topic) --output_dir $(arg image_export_dir) --prefix segment_overlay --interval $(arg image_export_sec_per_frame)"
-        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
-        output="screen" />
-
-      <node pkg="system_bringup"
-        type="topic_image_timestamp_saver.py"
-          name="export_projected_pc_images"
-        args="--topic $(arg segment_result_pc_topic) --output_dir $(arg image_export_dir) --prefix projected_pc --interval $(arg image_export_sec_per_frame)"
-        launch-prefix="bash -c 'mkdir -p $(arg image_export_dir); sleep $(arg image_export_start_sec); exec timeout $(arg image_export_duration_sec)s $0 $@'"
-        output="screen" />
   </group>
 
   <node pkg="rviz"
@@ -187,7 +162,8 @@
   <node pkg="rosbag"
         type="play"
         name="rosbag_play"
-        args="$(arg bag_file)"
+        args="-r 0.5 $(arg bag_file)"
         launch-prefix="bash -c 'sleep 1; exec $0 $@'"
         output="screen" />
+
 </launch>

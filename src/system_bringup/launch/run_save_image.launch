@@ -1,22 +1,20 @@
 <launch>
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier.bag" /> -->
-  <arg name="bag_file" default="/home/nvidia/ws_livox/data/raw_sensor_capture_nvidia.bag" />
-  
-  <arg name="livox_merge_rviz" default="true" />
+  <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier_raw.bag" />
+
+  <arg name="livox_merge_rviz" default="false" />
   <arg name="detector_rviz" default="false" />
   <arg name="lio_sam_rviz" default="false" />
-  <arg name="enable_segment" default="false" />
-  <arg name="segment_rviz" default="true" />
+  <arg name="enable_segment" default="true" />
+  <arg name="segment_rviz" default="false" />
   <arg name="launch_rviz" default="$(arg segment_rviz)" />
-  <arg name="rviz_config" default="$(find system_bringup)/rviz/temp.rviz" />
+  <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
   <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
-  <arg name="leveler_calib_duration_sec" default="1.0" />
-  <arg name="leveler_min_imu_samples" default="200" />
+  <arg name="leveler_calib_duration_sec" default="2.0" />
+  <arg name="leveler_min_imu_samples" default="600" />
   <arg name="leveler_calib_max_gyro_norm_rad_s" default="0.5" />
-  <!-- m_detector 订阅 /lio_sam/mapping/cloud_registered；这里显式把 mapping 节流调到 10Hz。 -->
-  <arg name="lio_sam_mapping_process_interval" default="0.1" />
 
   <!-- body_leveled 用于传感器侧水平化；LIO-SAM 与下游保持原有 odom/map 世界系。 -->
   <arg name="odometry_frame" default="odom" />
@@ -31,6 +29,7 @@
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
+  <arg name="segment_pure_image_topic" default="/segment/pure_image_raw" />
   <arg name="segment_weight_name" default="20260420.engine" />
   <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
   <arg name="segment_projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
@@ -43,19 +42,20 @@
   <arg name="enable_warning_evaluator" default="true" />
   <arg name="enable_warning_controller" default="true" />
   <arg name="enable_cylinder_object_source" default="true" />
-  <!-- no_object 入口保留原有支撑点语义；这里只同步参数接口，便于按需覆盖。 -->
-  <arg name="cylinder_ground_contact_mode" default="support_cloud" />
-  <arg name="cylinder_fixed_ground_z" default="0.0" />
-  <!-- 关闭视觉投影时，可用固定锚点圆柱替代视觉锚点；偏移量按 world_frame 坐标轴应用。默认配置表示“机器人在 map 中的位置向下 3m”。 -->
-  <arg name="cylinder_use_fixed_anchor" default="true" />
-  <arg name="cylinder_fixed_anchor_frame" default="base_link" />
-  <arg name="cylinder_fixed_anchor_x" default="0.0" />
-  <arg name="cylinder_fixed_anchor_y" default="0.0" />
-  <arg name="cylinder_fixed_anchor_z" default="-5.0" />
+    <!-- 当前 tower_crane_section_raw.bag 中，map 系地面高度约在 -9.2m；
+      固定 ground_z 取这个量级，避免圆柱被 0.0 阈值整帧抑制。 -->
+  <arg name="cylinder_ground_contact_mode" default="fixed_ground_z" />
+    <arg name="cylinder_fixed_ground_z" default="-7.0" />
   <!-- 同时启用 visual 静态距离预警和圆柱动态预警。 -->
   <arg name="warning_source_mode" default="cylinder" />
-  <arg name="warning_static_cloud_source" default="map_local" />
+  <arg name="warning_static_cloud_source" default="deskew" />
   <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
+
+  <!-- YOLO 检测结果图像保存参数 -->
+  <arg name="enable_yolo_image_save" default="true" />
+  <arg name="yolo_image_save_dir" default="/home/nvidia/ws_livox/data/yolo_images" />
+  <arg name="yolo_image_save_prefix" default="yolo" />
+  <arg name="yolo_image_save_interval" default="5" />
 
   <!-- 启动相机 tf 转换。raw 图像直接进入后续链路，不再经过压缩/解压重发。 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
@@ -86,10 +86,6 @@
   <!-- 启动 LIO-SAM (6-axis) -->
   <include file="$(find lio_sam)/launch/run6axis.launch">
     <arg name="launch_rviz" value="$(arg lio_sam_rviz)" />
-    <arg name="mapping_process_interval" value="$(arg lio_sam_mapping_process_interval)" />
-    <!-- 对照远端基线：no_object 启动不走本地新增的 selected-object map 过滤链，避免建图参考被误删。 -->
-    <arg name="selected_object_map_filter_enabled" value="false" />
-    <!-- 对照远端基线：关闭本地 6 轴 IMU 加速度姿态覆盖，避免 roll/pitch 初值在回放起步时被瞬时重写。 -->
     <arg name="use_accel_tilt_for_6axis" value="false" />
   </include>
 
@@ -111,21 +107,13 @@
   </include>
 
   <group if="$(arg enable_warning_evaluator)">
-    <group if="$(arg enable_segment)">
-      <include file="$(find lio_sam)/launch/visual_object_selector.launch">
-        <arg name="output_topic" value="$(arg selected_visual_objects_topic)" />
-      </include>
+    <include file="$(find lio_sam)/launch/visual_object_selector.launch">
+      <arg name="output_topic" value="$(arg selected_visual_objects_topic)" />
+    </include>
 
-    </group>
-
-    <group if="$(eval arg('enable_cylinder_object_source') and (arg('enable_segment') or arg('cylinder_use_fixed_anchor')))">
+    <group if="$(arg enable_cylinder_object_source)">
       <include file="$(find lio_sam)/launch/cylinder_object_source.launch">
         <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
-        <arg name="use_fixed_anchor" value="$(arg cylinder_use_fixed_anchor)" />
-        <arg name="fixed_anchor_frame" value="$(arg cylinder_fixed_anchor_frame)" />
-        <arg name="fixed_anchor_x" value="$(arg cylinder_fixed_anchor_x)" />
-        <arg name="fixed_anchor_y" value="$(arg cylinder_fixed_anchor_y)" />
-        <arg name="fixed_anchor_z" value="$(arg cylinder_fixed_anchor_z)" />
         <arg name="ground_contact_mode" value="$(arg cylinder_ground_contact_mode)" />
         <arg name="fixed_ground_z" value="$(arg cylinder_fixed_ground_z)" />
       </include>
@@ -151,6 +139,7 @@
       <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
       <arg name="topic_res_img" value="$(arg segment_result_topic)" />
       <arg name="topic_res_img_pc" value="$(arg segment_result_pc_topic)" />
+      <arg name="topic_pure_img" value="$(arg segment_pure_image_topic)" />
       <arg name="weight_name" value="$(arg segment_weight_name)" />
       <arg name="projection_config_path" value="$(arg segment_projection_config_path)" />
       <arg name="flip_lidar_y_for_projection" value="$(arg segment_flip_lidar_y_for_projection)" />
@@ -176,4 +165,40 @@
         args="$(arg bag_file)"
         launch-prefix="bash -c 'sleep 1; exec $0 $@'"
         output="screen" />
+
+  <!-- 保存 YOLO 检测结果图像（带时间戳文件名） -->
+  <group if="$(arg enable_yolo_image_save)">
+    <node pkg="system_bringup"
+          type="topic_image_timestamp_saver.py"
+          name="raw_image_saver"
+          output="screen"
+          args="--topic $(arg segment_raw_image_topic)
+                --output_dir $(arg yolo_image_save_dir)
+                --prefix raw
+                --interval $(arg yolo_image_save_interval)" />
+    <node pkg="system_bringup"
+          type="topic_image_timestamp_saver.py"
+          name="segment_image_saver"
+          output="screen"
+          args="--topic $(arg segment_result_topic)
+                --output_dir $(arg yolo_image_save_dir)
+                --prefix segment
+                --interval $(arg yolo_image_save_interval)" />
+    <node pkg="system_bringup"
+          type="topic_image_timestamp_saver.py"
+          name="projection_image_saver"
+          output="screen"
+          args="--topic $(arg segment_result_pc_topic)
+                --output_dir $(arg yolo_image_save_dir)
+                --prefix projection
+                --interval $(arg yolo_image_save_interval)" />
+    <node pkg="system_bringup"
+          type="topic_image_timestamp_saver.py"
+          name="pure_image_saver"
+          output="screen"
+          args="--topic $(arg segment_pure_image_topic)
+                --output_dir $(arg yolo_image_save_dir)
+                --prefix pure
+                --interval $(arg yolo_image_save_interval)" />
+  </group>
 </launch>

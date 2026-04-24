@@ -6,6 +6,8 @@ cylinder_object_source:
   fixed_anchor_x: 0.0
   fixed_anchor_y: 0.0
   fixed_anchor_z: -3.0
+  ground_contact_mode: support_cloud
+  fixed_ground_z: 0.0
   output_frame: map
   output_topic: /warning/cylinder_object_states
   marker_topic: /warning/cylinder_object_markers

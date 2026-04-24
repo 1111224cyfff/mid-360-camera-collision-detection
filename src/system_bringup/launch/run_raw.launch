@@ -29,6 +29,7 @@
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
+  <arg name="segment_pure_image_topic" default="/segment/pure_image_raw" />
   <arg name="segment_weight_name" default="20260420.engine" />
   <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
   <arg name="segment_projection_config_path" default="$(find yolo26_ros)/config/segment_projection.yaml" />
@@ -38,11 +39,19 @@
   <arg name="segment_sync_max_interval_sec" default="0.05" />
   <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
   <arg name="segment_object_radius_padding_m" default="0.2" />
+  <arg name="segment_enable_temporal_metrics" default="true" />
+  <arg name="segment_temporal_metrics_log_period_sec" default="5.0" />
+  <arg name="segment_temporal_metrics_csv_path" default="/home/nvidia/ws_livox/tmp/segment_metrics.csv" />
   <arg name="enable_warning_evaluator" default="true" />
   <arg name="enable_warning_controller" default="true" />
   <arg name="enable_cylinder_object_source" default="true" />
+    <!-- 当前 tower_crane_section_raw.bag 中，map 系地面高度约在 -9.2m；
+      固定 ground_z 取这个量级，避免圆柱被 0.0 阈值整帧抑制。 -->
+  <arg name="cylinder_ground_contact_mode" default="fixed_ground_z" />
+    <arg name="cylinder_fixed_ground_z" default="-7.0" />
   <!-- 同时启用 visual 静态距离预警和圆柱动态预警。 -->
   <arg name="warning_source_mode" default="cylinder" />
+  <arg name="warning_static_cloud_source" default="deskew" />
   <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
 
   <!-- 启动相机 tf 转换。raw 图像直接进入后续链路，不再经过压缩/解压重发。 -->
@@ -102,6 +111,8 @@
     <group if="$(arg enable_cylinder_object_source)">
       <include file="$(find lio_sam)/launch/cylinder_object_source.launch">
         <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+        <arg name="ground_contact_mode" value="$(arg cylinder_ground_contact_mode)" />
+        <arg name="fixed_ground_z" value="$(arg cylinder_fixed_ground_z)" />
       </include>
     </group>
 
@@ -109,6 +120,7 @@
       <arg name="output_frame" value="$(arg world_frame)" />
       <arg name="monitored_source_mode" value="$(arg warning_source_mode)" />
       <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
+      <arg name="static_cloud_source" value="$(arg warning_static_cloud_source)" />
     </include>
   </group>
 
@@ -124,6 +136,7 @@
       <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
       <arg name="topic_res_img" value="$(arg segment_result_topic)" />
       <arg name="topic_res_img_pc" value="$(arg segment_result_pc_topic)" />
+      <arg name="topic_pure_img" value="$(arg segment_pure_image_topic)" />
       <arg name="weight_name" value="$(arg segment_weight_name)" />
       <arg name="projection_config_path" value="$(arg segment_projection_config_path)" />
       <arg name="flip_lidar_y_for_projection" value="$(arg segment_flip_lidar_y_for_projection)" />
@@ -132,6 +145,9 @@
       <arg name="sync_max_interval_sec" value="$(arg segment_sync_max_interval_sec)" />
       <arg name="tf_lookup_timeout_sec" value="$(arg segment_tf_lookup_timeout_sec)" />
       <arg name="object_radius_padding_m" value="$(arg segment_object_radius_padding_m)" />
+      <arg name="enable_temporal_metrics" value="$(arg segment_enable_temporal_metrics)" />
+      <arg name="temporal_metrics_log_period_sec" value="$(arg segment_temporal_metrics_log_period_sec)" />
+      <arg name="temporal_metrics_csv_path" value="$(arg segment_temporal_metrics_csv_path)" />
     </include>
   </group>
 
@@ -146,7 +162,8 @@
   <node pkg="rosbag"
         type="play"
         name="rosbag_play"
-        args="$(arg bag_file)"
+        args="-r 0.5 $(arg bag_file)"
         launch-prefix="bash -c 'sleep 1; exec $0 $@'"
         output="screen" />
+
 </launch>

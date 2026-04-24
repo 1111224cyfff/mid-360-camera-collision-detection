@@ -314,19 +314,19 @@ public:
     pnh_.param<double>("visual_object_radius_margin_m", visual_object_radius_margin_m_, 0.15);
     pnh_.param<double>("static_warning_min_lift_height_m", static_warning_min_lift_height_m_, 1.0);
 
-    pnh_.param<double>("static_notice_clearance", static_notice_clearance_, 2.5);
-    pnh_.param<double>("static_warning_clearance", static_warning_clearance_, 1.5);
-    pnh_.param<double>("static_emergency_clearance", static_emergency_clearance_, 0.8);
+    pnh_.param<double>("static_notice_clearance", static_notice_clearance_, 3.0);
+    pnh_.param<double>("static_warning_clearance", static_warning_clearance_, 2.0);
+    pnh_.param<double>("static_emergency_clearance", static_emergency_clearance_, 1.0);
     pnh_.param<int>("static_notice_min_points", static_notice_min_points_, 1);
     pnh_.param<int>("static_warning_min_points", static_warning_min_points_, 1);
     pnh_.param<int>("static_emergency_min_points", static_emergency_min_points_, 1);
 
-    pnh_.param<double>("dynamic_notice_clearance", dynamic_notice_clearance_, 2.0);
-    pnh_.param<double>("dynamic_warning_clearance", dynamic_warning_clearance_, 1.2);
-    pnh_.param<double>("dynamic_emergency_clearance", dynamic_emergency_clearance_, 0.6);
+    pnh_.param<double>("dynamic_notice_clearance", dynamic_notice_clearance_, 2.5);
+    pnh_.param<double>("dynamic_warning_clearance", dynamic_warning_clearance_, 1.5);
+    pnh_.param<double>("dynamic_emergency_clearance", dynamic_emergency_clearance_, 0.8);
 
-    pnh_.param<double>("notice_ttc", notice_ttc_sec_, 3.0);
-    pnh_.param<double>("warning_ttc", warning_ttc_sec_, 2.0);
+    pnh_.param<double>("notice_ttc", notice_ttc_sec_, 4.0);
+    pnh_.param<double>("warning_ttc", warning_ttc_sec_, 2.5);
     pnh_.param<double>("emergency_ttc", emergency_ttc_sec_, 1.0);
 
     pnh_.param<double>("default_cylinder_radius", default_cylinder_radius_, 2.0);
@@ -1033,6 +1033,8 @@ private:
     double nearest_distance_sq = std::numeric_limits<double>::infinity();
     bool found_candidate = false;
     Eigen::Vector3d centroid_accumulator = Eigen::Vector3d::Zero();
+    const double bounded_object_radius = std::max(0.0, object_radius);
+    const double bounded_object_radius_sq = bounded_object_radius * bounded_object_radius;
     for (const auto& point : static_cloud_->points) {
       if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
         continue;
@@ -1045,6 +1047,9 @@ private:
       const double dy = static_cast<double>(point.y) - object_pose_cloud.position.y;
       const double dz = static_cast<double>(point.z) - object_pose_cloud.position.z;
       const double distance_sq = dx * dx + dy * dy + dz * dz;
+      if (distance_sq <= bounded_object_radius_sq) {
+        continue;
+      }
       if (distance_sq < nearest_distance_sq) {
         nearest_distance_sq = distance_sq;
         if (debug_info) {
@@ -1054,7 +1059,7 @@ private:
         }
       }
       if (debug_info) {
-        const double point_clearance = std::max(0.0, std::sqrt(distance_sq) - object_radius);
+        const double point_clearance = std::sqrt(distance_sq) - bounded_object_radius;
         if (point_clearance <= static_notice_clearance_) {
           ++debug_info->support_metrics.notice_point_count;
         }
@@ -1078,7 +1083,7 @@ private:
       return std::numeric_limits<double>::infinity();
     }
 
-    const double clearance = std::max(0.0, std::sqrt(nearest_distance_sq) - object_radius);
+    const double clearance = std::sqrt(nearest_distance_sq) - bounded_object_radius;
     if (debug_info) {
       debug_info->clearance_valid = true;
       debug_info->nearest_clearance = clearance;

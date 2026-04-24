@@ -26,6 +26,10 @@
 
 namespace
 {
+constexpr char kSupportCloudGroundContactMode[] = "support_cloud";
+constexpr char kFixedGroundZContactMode[] = "fixed_ground_z";
+constexpr double kMinimumValidFixedGroundHeightM = 1e-3;
+
 double clampValue(double value, double low, double high)
 {
   return std::max(low, std::min(value, high));
@@ -66,6 +70,8 @@ public:
     pnh_.param<double>("fixed_anchor_x", fixed_anchor_x_, 0.0);
     pnh_.param<double>("fixed_anchor_y", fixed_anchor_y_, 0.0);
     pnh_.param<double>("fixed_anchor_z", fixed_anchor_z_, -3.0);
+    pnh_.param<std::string>("ground_contact_mode", ground_contact_mode_, std::string(kSupportCloudGroundContactMode));
+    pnh_.param<double>("fixed_ground_z", fixed_ground_z_, 0.0);
     pnh_.param<int>("object_class_id", object_class_id_, -100);
     pnh_.param<double>("radius", radius_m_, 2.0);
     pnh_.param<double>("min_height", min_height_m_, 0.5);
@@ -81,6 +87,7 @@ public:
     nh_.param<bool>("/use_sim_time", use_sim_time_, false);
 
     loadAnchorClassNames();
+    sanitizeGroundContactMode();
 
     if (!use_fixed_anchor_ && !visual_objects_topic_.empty()) {
       sub_visual_objects_ = nh_.subscribe(visual_objects_topic_, 3, &CylinderObjectSourceNode::visualObjectsCallback, this);
@@ -100,6 +107,10 @@ public:
                       std::to_string(fixed_anchor_y_) + "," +
                       std::to_string(fixed_anchor_z_) + ")")
                     : std::string())
+                    << " ground_contact_mode=" << ground_contact_mode_
+                    << (useFixedGroundContactMode()
+                        ? (std::string(" fixed_ground_z=") + std::to_string(fixed_ground_z_))
+                        : std::string())
                     << " output_frame=" << output_frame_
                     << " output_topic=" << output_topic_
                     << " cylinder_radius=" << radius_m_
@@ -107,6 +118,23 @@ public:
   }
 
 private:
+  void sanitizeGroundContactMode()
+  {
+    if (ground_contact_mode_ == kSupportCloudGroundContactMode
+        || ground_contact_mode_ == kFixedGroundZContactMode) {
+      return;
+    }
+
+    ROS_WARN_STREAM("[cylinder_object_source] Unknown ground_contact_mode='" << ground_contact_mode_
+                    << "', fallback to '" << kSupportCloudGroundContactMode << "'.");
+    ground_contact_mode_ = kSupportCloudGroundContactMode;
+  }
+
+  bool useFixedGroundContactMode() const
+  {
+    return ground_contact_mode_ == kFixedGroundZContactMode;
+  }
+
   void loadAnchorClassNames()
   {
     XmlRpc::XmlRpcValue class_names_param;
@@ -157,37 +185,51 @@ private:
       return;
     }
 
-    pcl::PointCloud<pcl::PointXYZI> cloud;
-    pcl::fromROSMsg(*msg, cloud);
-
-    std::vector<double> support_z_values;
-    support_z_values.reserve(cloud.points.size());
-
-    for (const auto& point : cloud.points) {
-      if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
-        continue;
-      }
-
-      const double dx = static_cast<double>(point.x) - top_pose_cloud.position.x;
-      const double dy = static_cast<double>(point.y) - top_pose_cloud.position.y;
-      const double radial_distance = std::hypot(dx, dy);
-      if (radial_distance > cylinder_radius_m) {
-        continue;
-      }
-      if (point.z > top_pose_cloud.position.z - min_support_drop_m_) {
-        continue;
-      }
-
-      support_z_values.push_back(static_cast<double>(point.z));
-    }
-
     double contact_z_estimate = std::numeric_limits<double>::quiet_NaN();
-    if (!estimateSupportContactZ(support_z_values, &contact_z_estimate)) {
-      publishEmptyOutputs(stamp);
-      return;
-    }
+    double height_m = std::numeric_limits<double>::quiet_NaN();
+    size_t support_point_count = 0U;
 
-    const double height_m = std::max(min_height_m_, top_pose_cloud.position.z - contact_z_estimate);
+    if (useFixedGroundContactMode()) {
+      contact_z_estimate = fixed_ground_z_;
+      const double raw_height_m = top_pose_output.position.z - fixed_ground_z_;
+      if (raw_height_m <= kMinimumValidFixedGroundHeightM) {
+        publishEmptyOutputs(stamp);
+        return;
+      }
+      height_m = raw_height_m;
+    } else {
+      pcl::PointCloud<pcl::PointXYZI> cloud;
+      pcl::fromROSMsg(*msg, cloud);
+
+      std::vector<double> support_z_values;
+      support_z_values.reserve(cloud.points.size());
+
+      for (const auto& point : cloud.points) {
+        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+          continue;
+        }
+
+        const double dx = static_cast<double>(point.x) - top_pose_cloud.position.x;
+        const double dy = static_cast<double>(point.y) - top_pose_cloud.position.y;
+        const double radial_distance = std::hypot(dx, dy);
+        if (radial_distance > cylinder_radius_m) {
+          continue;
+        }
+        if (point.z > top_pose_cloud.position.z - min_support_drop_m_) {
+          continue;
+        }
+
+        support_z_values.push_back(static_cast<double>(point.z));
+      }
+
+      support_point_count = support_z_values.size();
+      if (!estimateSupportContactZ(support_z_values, &contact_z_estimate)) {
+        publishEmptyOutputs(stamp);
+        return;
+      }
+
+      height_m = std::max(min_height_m_, top_pose_cloud.position.z - contact_z_estimate);
+    }
 
     lio_sam::SegmentedObjectStateArray out;
     out.header = msg->header;
@@ -209,7 +251,7 @@ private:
     object_state.bounding_radius = static_cast<float>(cylinder_radius_m);
     object_state.footprint_radius = static_cast<float>(cylinder_radius_m);
     object_state.nearest_range = static_cast<float>(pointDistance(top_pose_output.position));
-    object_state.point_count = static_cast<uint32_t>(support_z_values.size());
+    object_state.point_count = static_cast<uint32_t>(support_point_count);
     out.objects.push_back(object_state);
 
     pub_objects_.publish(out);
@@ -220,9 +262,11 @@ private:
         top_pose_output.position,
         cylinder_radius_m,
         height_m,
-        support_z_values.size(),
+        support_point_count,
         anchor_object.class_name,
-        anchor_object.class_id);
+        anchor_object.class_id,
+        contact_z_estimate,
+        ground_contact_mode_);
     }
   }
 
@@ -494,7 +538,9 @@ private:
     double height_m,
     size_t support_points,
     const std::string& anchor_class_name,
-    int anchor_class_id)
+    int anchor_class_id,
+    double contact_z_estimate,
+    const std::string& ground_contact_mode)
   {
     visualization_msgs::MarkerArray markers;
 
@@ -545,9 +591,16 @@ private:
     text_stream << "anchor=" << anchor_class_name
                 << " cls=" << anchor_class_id
                 << " top=(" << top_center.x << "," << top_center.y << "," << top_center.z << ")"
+                << " mode=" << ground_contact_mode
                 << " r=" << radius_m
                 << " h=" << height_m
-                << " pts=" << support_points;
+                << " bottom_z=" << (top_center.z - height_m);
+    if (ground_contact_mode == kFixedGroundZContactMode) {
+      text_stream << " ground_z=" << contact_z_estimate;
+    } else {
+      text_stream << " contact_z=" << contact_z_estimate
+                  << " pts=" << support_points;
+    }
     text_marker.text = text_stream.str();
     text_marker.lifetime = ros::Duration(marker_lifetime_sec_);
     markers.markers.push_back(text_marker);
@@ -574,6 +627,7 @@ private:
   std::string marker_topic_;
   std::string object_class_name_;
   std::string fixed_anchor_frame_;
+  std::string ground_contact_mode_;
 
   lio_sam::SegmentedObjectStateArray latest_visual_objects_;
   ros::Time latest_visual_receive_time_;
@@ -585,6 +639,7 @@ private:
   double fixed_anchor_x_{0.0};
   double fixed_anchor_y_{0.0};
   double fixed_anchor_z_{-3.0};
+  double fixed_ground_z_{0.0};
   double radius_m_{2.0};
   double min_height_m_{0.5};
   double visual_object_timeout_sec_{1.0};

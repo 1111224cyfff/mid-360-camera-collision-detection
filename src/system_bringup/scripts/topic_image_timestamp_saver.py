@@ -5,7 +5,7 @@ import os
 import cv2
 import numpy as np
 import rospy
-from sensor_msgs.msg import CompressedImage, Image
+from sensor_msgs.msg import Image
 
 
 class TopicImageTimestampSaver:
@@ -19,7 +19,6 @@ class TopicImageTimestampSaver:
 
         os.makedirs(self.output_dir, exist_ok=True)
 
-        self.sub_compressed = rospy.Subscriber(self.topic, CompressedImage, self.compressed_cb, queue_size=10)
         self.sub_raw = rospy.Subscriber(self.topic, Image, self.raw_cb, queue_size=10)
 
         rospy.loginfo("[topic_image_timestamp_saver] topic=%s output_dir=%s prefix=%s interval=%.3fs",
@@ -43,7 +42,7 @@ class TopicImageTimestampSaver:
 
         sec = stamp.secs
         nsec = stamp.nsecs
-        filename = f"{self.prefix}_{sec}_{nsec:09d}_{self.saved_count:06d}.jpg"
+        filename = f"{sec}_{nsec:09d}_{self.prefix}_{self.saved_count:06d}.jpg"
         out_path = os.path.join(self.output_dir, filename)
 
         if cv2.imwrite(out_path, image):
@@ -53,14 +52,6 @@ class TopicImageTimestampSaver:
                 rospy.loginfo("[topic_image_timestamp_saver] saved=%d latest=%s", self.saved_count, out_path)
         else:
             rospy.logwarn("[topic_image_timestamp_saver] failed to write image: %s", out_path)
-
-    def compressed_cb(self, msg):
-        arr = np.frombuffer(msg.data, dtype=np.uint8)
-        image = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if image is None:
-            rospy.logwarn_throttle(2.0, "[topic_image_timestamp_saver] decode compressed image failed on %s", self.topic)
-            return
-        self.save_image(image, self.msg_stamp(msg))
 
     def raw_cb(self, msg):
         encoding = (msg.encoding or "").lower()

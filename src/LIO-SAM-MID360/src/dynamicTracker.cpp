@@ -9,7 +9,10 @@
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <fstream>
+#include <iomanip>
 #include <limits>
 #include <string>
 #include <unordered_set>
@@ -18,6 +21,79 @@
 
 namespace
 {
+struct StageStats {
+    double min = std::numeric_limits<double>::infinity();
+    double max = 0.0;
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    std::size_t count = 0;
+
+    static constexpr std::size_t MAX_SAMPLES = 1000;
+    double samples[MAX_SAMPLES];
+    std::size_t sample_head = 0;
+    std::size_t sample_count = 0;
+
+    void add(double value)
+    {
+        if (value < 0.0) value = 0.0;
+        min = std::min(min, value);
+        max = std::max(max, value);
+        sum += value;
+        sum_sq += value * value;
+        ++count;
+
+        samples[sample_head] = value;
+        sample_head = (sample_head + 1) % MAX_SAMPLES;
+        if (sample_count < MAX_SAMPLES) {
+            ++sample_count;
+        }
+    }
+
+    double avg() const
+    {
+        return count == 0 ? 0.0 : sum / static_cast<double>(count);
+    }
+
+    double stdDev() const
+    {
+        if (count < 2) return 0.0;
+        double mean = avg();
+        double variance = (sum_sq / static_cast<double>(count)) - (mean * mean);
+        return std::max(0.0, std::sqrt(variance));
+    }
+
+    double p95() const
+    {
+        if (sample_count == 0) return 0.0;
+        std::vector<double> sorted;
+        sorted.reserve(sample_count);
+        if (sample_count < MAX_SAMPLES) {
+            for (std::size_t i = 0; i < sample_count; ++i) {
+                sorted.push_back(samples[i]);
+            }
+        } else {
+            for (std::size_t i = 0; i < MAX_SAMPLES; ++i) {
+                sorted.push_back(samples[(sample_head + i) % MAX_SAMPLES]);
+            }
+        }
+        std::sort(sorted.begin(), sorted.end());
+        std::size_t idx = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(sorted.size() - 1)));
+        idx = std::min(idx, sorted.size() - 1);
+        return sorted[idx];
+    }
+
+    void reset()
+    {
+        min = std::numeric_limits<double>::infinity();
+        max = 0.0;
+        sum = 0.0;
+        sum_sq = 0.0;
+        count = 0;
+        sample_head = 0;
+        sample_count = 0;
+    }
+};
+
 struct KalmanCV2D
 {
   // State: [px, py, vx, vy]
@@ -169,6 +245,10 @@ public:
     pnh_.param<bool>("publish_tracked_centers", publish_centers_, true);
     pnh_.param<bool>("publish_track_states", publish_track_states_, true);
 
+    pnh_.param<bool>("enable_latency_stats", enable_latency_stats_, enable_latency_stats_);
+    pnh_.param<double>("latency_log_period_sec", latency_log_period_sec_, latency_log_period_sec_);
+    pnh_.param<std::string>("latency_csv_path", latency_csv_path_, latency_csv_path_);
+
     sub_centers_ = nh_.subscribe(input_topic_, 5, &DynamicTrackerNode::centersCallback, this);
 
     pub_tracks_markers_ = nh_.advertise<visualization_msgs::MarkerArray>("dynamic_tracker/tracks", 1);
@@ -177,11 +257,23 @@ public:
     pub_track_states_ = nh_.advertise<lio_sam::DynamicTrackArray>("dynamic_tracker/track_states", 1);
 
     ROS_INFO_STREAM("[dynamic_tracker] input_topic=" << input_topic_);
+
+    if (enable_latency_stats_ && !latency_csv_path_.empty()) {
+      latency_csv_.open(latency_csv_path_, std::ios::out | std::ios::trunc);
+      if (latency_csv_.is_open()) {
+        latency_csv_ << "timestamp,stage,samples,avg_ms,std_ms,p95_ms,max_ms\n";
+        latency_csv_.flush();
+        ROS_INFO("Latency CSV: %s", latency_csv_path_.c_str());
+      } else {
+        ROS_WARN("Failed to open latency CSV: %s", latency_csv_path_.c_str());
+      }
+    }
   }
 
 private:
   void centersCallback(const geometry_msgs::PoseArrayConstPtr& msg)
   {
+    const auto callback_start = std::chrono::steady_clock::now();
     const ros::Time stamp = msg->header.stamp.isZero() ? ros::Time::now() : msg->header.stamp;
     const std::string frame = (!output_frame_.empty()) ? output_frame_ : msg->header.frame_id;
 
@@ -196,7 +288,9 @@ private:
       dets.push_back(d);
     }
 
+    const auto prediction_start = std::chrono::steady_clock::now();
     predictAll(stamp);
+    const auto prediction_end = std::chrono::steady_clock::now();
 
     // Build candidate pairs (trackIdx, detIdx, dist)
     struct Pair
@@ -296,12 +390,20 @@ private:
 
     pruneTracks(stamp);
 
+    const auto publish_start = std::chrono::steady_clock::now();
     if (publish_markers_)
       publishMarkers(frame, stamp);
     if (publish_centers_)
       publishCenters(frame, stamp);
     if (publish_track_states_)
       publishTrackStates(frame, stamp);
+    const auto publish_end = std::chrono::steady_clock::now();
+
+    const double prediction_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(prediction_end - prediction_start).count()) / 1000.0;
+    const double publish_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - publish_start).count()) / 1000.0;
+    const double e2e_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - callback_start).count()) / 1000.0;
+    const double input_assoc_ms = std::max(0.0, e2e_ms - prediction_ms - publish_ms);
+    recordAndMaybeLogLatency(input_assoc_ms, prediction_ms, publish_ms, e2e_ms);
   }
 
   void predictAll(const ros::Time& stamp)
@@ -556,6 +658,79 @@ private:
   int next_id_{1};
   std::vector<Track> tracks_;
   std::vector<int> last_published_ids_;
+
+  // Latency stats
+  bool enable_latency_stats_{true};
+  double latency_log_period_sec_{5.0};
+  ros::Time latency_last_log_time_;
+  StageStats stat_input_assoc_ms_;
+  StageStats stat_prediction_ms_;
+  StageStats stat_publish_ms_;
+  StageStats stat_e2e_ms_;
+  std::string latency_csv_path_;
+  std::ofstream latency_csv_;
+
+  void recordAndMaybeLogLatency(
+      double input_assoc_ms,
+      double prediction_ms,
+      double publish_ms,
+      double e2e_ms)
+  {
+    if (!enable_latency_stats_) {
+      return;
+    }
+
+    stat_input_assoc_ms_.add(input_assoc_ms);
+    stat_prediction_ms_.add(prediction_ms);
+    stat_publish_ms_.add(publish_ms);
+    stat_e2e_ms_.add(e2e_ms);
+
+    const ros::Time now = ros::Time::now();
+    if (latency_last_log_time_.isZero()) {
+      latency_last_log_time_ = now;
+      return;
+    }
+
+    if ((now - latency_last_log_time_).toSec() < latency_log_period_sec_) {
+      return;
+    }
+
+    auto dump = [](const char* label, const StageStats& s) {
+      ROS_INFO(
+          "[dynamic_tracker latency] %-22s samples=%4zu avg=%6.2f std=%6.2f p95=%6.2f max=%6.2f ms",
+          label, s.count, s.avg(), s.stdDev(), s.p95(), s.max);
+    };
+
+    ROS_INFO("[dynamic_tracker latency] === Module Latency Report ===");
+    dump("input_assoc", stat_input_assoc_ms_);
+    dump("prediction", stat_prediction_ms_);
+    dump("publish", stat_publish_ms_);
+    dump("e2e_total", stat_e2e_ms_);
+
+    if (latency_csv_.is_open()) {
+      auto write_row = [&now](std::ofstream& csv, const char* stage, const StageStats& s) {
+        csv << std::fixed << std::setprecision(3)
+            << now.toSec() << ","
+            << stage << ","
+            << s.count << ","
+            << s.avg() << ","
+            << s.stdDev() << ","
+            << s.p95() << ","
+            << s.max << "\n";
+      };
+      write_row(latency_csv_, "input_assoc", stat_input_assoc_ms_);
+      write_row(latency_csv_, "prediction", stat_prediction_ms_);
+      write_row(latency_csv_, "publish", stat_publish_ms_);
+      write_row(latency_csv_, "e2e_total", stat_e2e_ms_);
+      latency_csv_.flush();
+    }
+
+    stat_input_assoc_ms_.reset();
+    stat_prediction_ms_.reset();
+    stat_publish_ms_.reset();
+    stat_e2e_ms_.reset();
+    latency_last_log_time_ = now;
+  }
 };
 
 int main(int argc, char** argv)

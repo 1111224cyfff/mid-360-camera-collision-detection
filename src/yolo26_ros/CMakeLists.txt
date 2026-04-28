@@ -149,3 +149,7 @@ install(DIRECTORY launch/
 install(DIRECTORY config/
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION}/config
 )
+
+catkin_install_python(PROGRAMS scripts/save_colored_pointcloud.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
+)

@@ -24,8 +24,10 @@
 #include <Eigen/Dense>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cctype>
+#include <fstream>
 #include <limits>
 #include <iomanip>
 #include <sstream>
@@ -35,6 +37,79 @@
 
 namespace
 {
+struct StageStats {
+    double min = std::numeric_limits<double>::infinity();
+    double max = 0.0;
+    double sum = 0.0;
+    double sum_sq = 0.0;
+    std::size_t count = 0;
+
+    static constexpr std::size_t MAX_SAMPLES = 1000;
+    double samples[MAX_SAMPLES];
+    std::size_t sample_head = 0;
+    std::size_t sample_count = 0;
+
+    void add(double value)
+    {
+        if (value < 0.0) value = 0.0;
+        min = std::min(min, value);
+        max = std::max(max, value);
+        sum += value;
+        sum_sq += value * value;
+        ++count;
+
+        samples[sample_head] = value;
+        sample_head = (sample_head + 1) % MAX_SAMPLES;
+        if (sample_count < MAX_SAMPLES) {
+            ++sample_count;
+        }
+    }
+
+    double avg() const
+    {
+        return count == 0 ? 0.0 : sum / static_cast<double>(count);
+    }
+
+    double stdDev() const
+    {
+        if (count < 2) return 0.0;
+        double mean = avg();
+        double variance = (sum_sq / static_cast<double>(count)) - (mean * mean);
+        return std::max(0.0, std::sqrt(variance));
+    }
+
+    double p95() const
+    {
+        if (sample_count == 0) return 0.0;
+        std::vector<double> sorted;
+        sorted.reserve(sample_count);
+        if (sample_count < MAX_SAMPLES) {
+            for (std::size_t i = 0; i < sample_count; ++i) {
+                sorted.push_back(samples[i]);
+            }
+        } else {
+            for (std::size_t i = 0; i < MAX_SAMPLES; ++i) {
+                sorted.push_back(samples[(sample_head + i) % MAX_SAMPLES]);
+            }
+        }
+        std::sort(sorted.begin(), sorted.end());
+        std::size_t idx = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(sorted.size() - 1)));
+        idx = std::min(idx, sorted.size() - 1);
+        return sorted[idx];
+    }
+
+    void reset()
+    {
+        min = std::numeric_limits<double>::infinity();
+        max = 0.0;
+        sum = 0.0;
+        sum_sq = 0.0;
+        count = 0;
+        sample_head = 0;
+        sample_count = 0;
+    }
+};
+
 struct DynamicRiskMetrics
 {
   int track_id{-1};
@@ -337,6 +412,21 @@ public:
     pnh_.param<double>("inside_cylinder_ignore_epsilon", inside_cylinder_ignore_epsilon_, 1e-3);
     nh_.param<bool>("/use_sim_time", use_sim_time_, false);
 
+    pnh_.param<bool>("enable_latency_stats", enable_latency_stats_, enable_latency_stats_);
+    pnh_.param<double>("latency_log_period_sec", latency_log_period_sec_, latency_log_period_sec_);
+    pnh_.param<std::string>("latency_csv_path", latency_csv_path_, latency_csv_path_);
+
+    if (enable_latency_stats_ && !latency_csv_path_.empty()) {
+      latency_csv_.open(latency_csv_path_, std::ios::out | std::ios::trunc);
+      if (latency_csv_.is_open()) {
+        latency_csv_ << "timestamp,stage,samples,avg_ms,std_ms,p95_ms,max_ms\n";
+        latency_csv_.flush();
+        ROS_INFO("Latency CSV: %s", latency_csv_path_.c_str());
+      } else {
+        ROS_WARN("Failed to open latency CSV: %s", latency_csv_path_.c_str());
+      }
+    }
+
     monitored_source_mode_ = parseMonitoredSourceMode(monitored_source_mode_raw_);
     loadMonitoredClassNames();
 
@@ -515,6 +605,8 @@ private:
 
   void evaluateAndPublish(const ros::Time& evaluation_stamp)
   {
+    const auto eval_start = std::chrono::steady_clock::now();
+
     lio_sam::WarningState out;
     out.header.stamp = evaluation_stamp;
     out.header.frame_id = output_frame_;
@@ -589,8 +681,11 @@ private:
     }
 
     if (!any_source_ready) {
+      const auto publish_start = std::chrono::steady_clock::now();
       publishWarningState(out, publish_markers_, default_pose, zeroVector(), empty_dynamic_risk, empty_static_support);
+      const auto eval_end = std::chrono::steady_clock::now();
       resetLevelState();
+      recordEvalLatency(eval_start, publish_start, eval_end);
       return;
     }
 
@@ -614,8 +709,11 @@ private:
       if (out.reason.empty()) {
         out.reason = "no_monitored_object";
       }
+      const auto publish_start = std::chrono::steady_clock::now();
       publishWarningState(out, publish_markers_, default_pose, zeroVector(), empty_dynamic_risk, empty_static_support);
+      const auto eval_end = std::chrono::steady_clock::now();
       resetLevelState();
+      recordEvalLatency(eval_start, publish_start, eval_end);
       return;
     }
 
@@ -672,6 +770,8 @@ private:
 
     out.active_level = applyLevelHysteresis(out.desired_level, evaluation_stamp);
     out.level_text = levelToText(out.active_level);
+
+    const auto publish_start = std::chrono::steady_clock::now();
     publishWarningState(
       out,
       publish_markers_,
@@ -679,6 +779,8 @@ private:
       out.monitored_velocity,
       best_evaluation->dynamic_risk,
       best_evaluation->static_support);
+    const auto eval_end = std::chrono::steady_clock::now();
+    recordEvalLatency(eval_start, publish_start, eval_end);
   }
 
   bool shouldEvaluateSource(ObjectSourceKind source_kind) const
@@ -2215,6 +2317,79 @@ private:
   ObjectMotionState visual_motion_state_;
   ObjectMotionState cylinder_motion_state_;
   std::vector<std::string> monitored_class_names_;
+
+  // Latency stats
+  bool enable_latency_stats_{true};
+  double latency_log_period_sec_{5.0};
+  std::string latency_csv_path_;
+  std::ofstream latency_csv_;
+  ros::Time latency_last_log_time_;
+  StageStats stat_risk_fusion_ms_;
+  StageStats stat_publish_ms_;
+  StageStats stat_e2e_ms_;
+
+  void recordEvalLatency(
+      const std::chrono::steady_clock::time_point& eval_start,
+      const std::chrono::steady_clock::time_point& publish_start,
+      const std::chrono::steady_clock::time_point& eval_end)
+  {
+    if (!enable_latency_stats_) {
+      return;
+    }
+
+    const double e2e_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(eval_end - eval_start).count()) / 1000.0;
+    const double publish_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(eval_end - publish_start).count()) / 1000.0;
+    const double risk_fusion_ms = std::max(0.0, e2e_ms - publish_ms);
+
+    stat_e2e_ms_.add(e2e_ms);
+    stat_publish_ms_.add(publish_ms);
+    stat_risk_fusion_ms_.add(risk_fusion_ms);
+
+    const ros::Time now = ros::Time::now();
+    if (latency_last_log_time_.isZero()) {
+      latency_last_log_time_ = now;
+      return;
+    }
+
+    if ((now - latency_last_log_time_).toSec() < latency_log_period_sec_) {
+      return;
+    }
+
+    auto dump = [](const char* label, const StageStats& s) {
+      ROS_INFO(
+          "[warning_evaluator latency] %-22s samples=%4zu avg=%6.2f std=%6.2f p95=%6.2f max=%6.2f ms",
+          label, s.count, s.avg(), s.stdDev(), s.p95(), s.max);
+    };
+
+    ROS_INFO("[warning_evaluator latency] === Module Latency Report ===");
+    dump("risk_fusion_judgment", stat_risk_fusion_ms_);
+    dump("publish", stat_publish_ms_);
+    dump("e2e_total", stat_e2e_ms_);
+
+    if (latency_csv_.is_open()) {
+      auto write_row = [&now](std::ofstream& csv, const char* stage, const StageStats& s) {
+        csv << std::fixed << std::setprecision(3)
+            << now.toSec() << ","
+            << stage << ","
+            << s.count << ","
+            << s.avg() << ","
+            << s.stdDev() << ","
+            << s.p95() << ","
+            << s.max << "\n";
+      };
+      write_row(latency_csv_, "risk_fusion_judgment", stat_risk_fusion_ms_);
+      write_row(latency_csv_, "publish", stat_publish_ms_);
+      write_row(latency_csv_, "e2e_total", stat_e2e_ms_);
+      latency_csv_.flush();
+    }
+
+    stat_risk_fusion_ms_.reset();
+    stat_publish_ms_.reset();
+    stat_e2e_ms_.reset();
+    latency_last_log_time_ = now;
+  }
 };
 
 int main(int argc, char** argv)

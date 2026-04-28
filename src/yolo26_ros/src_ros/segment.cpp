@@ -148,14 +148,28 @@ struct StageStats {
     double min = std::numeric_limits<double>::infinity();
     double max = 0.0;
     double sum = 0.0;
+    double sum_sq = 0.0;
     std::size_t count = 0;
+
+    static constexpr std::size_t MAX_SAMPLES = 1000;
+    double samples[MAX_SAMPLES];
+    std::size_t sample_head = 0;
+    std::size_t sample_count = 0;
 
     void add(double value)
     {
+        if (value < 0.0) value = 0.0;
         min = std::min(min, value);
         max = std::max(max, value);
         sum += value;
+        sum_sq += value * value;
         ++count;
+
+        samples[sample_head] = value;
+        sample_head = (sample_head + 1) % MAX_SAMPLES;
+        if (sample_count < MAX_SAMPLES) {
+            ++sample_count;
+        }
     }
 
     double avg() const
@@ -163,12 +177,43 @@ struct StageStats {
         return count == 0 ? 0.0 : sum / static_cast<double>(count);
     }
 
+    double stdDev() const
+    {
+        if (count < 2) return 0.0;
+        double mean = avg();
+        double variance = (sum_sq / static_cast<double>(count)) - (mean * mean);
+        return std::max(0.0, std::sqrt(variance));
+    }
+
+    double p95() const
+    {
+        if (sample_count == 0) return 0.0;
+        std::vector<double> sorted;
+        sorted.reserve(sample_count);
+        if (sample_count < MAX_SAMPLES) {
+            for (std::size_t i = 0; i < sample_count; ++i) {
+                sorted.push_back(samples[i]);
+            }
+        } else {
+            for (std::size_t i = 0; i < MAX_SAMPLES; ++i) {
+                sorted.push_back(samples[(sample_head + i) % MAX_SAMPLES]);
+            }
+        }
+        std::sort(sorted.begin(), sorted.end());
+        std::size_t idx = static_cast<std::size_t>(std::ceil(0.95 * static_cast<double>(sorted.size() - 1)));
+        idx = std::min(idx, sorted.size() - 1);
+        return sorted[idx];
+    }
+
     void reset()
     {
         min = std::numeric_limits<double>::infinity();
         max = 0.0;
         sum = 0.0;
+        sum_sq = 0.0;
         count = 0;
+        sample_head = 0;
+        sample_count = 0;
     }
 };
 
@@ -759,7 +804,8 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
     const ProjectionModel& projection_model,
     const ObjectCloudRefineSettings& refine_settings,
     cv::Mat* projected_overlay_image,
-    cv::Mat* pure_segmentation_image)
+    cv::Mat* pure_segmentation_image,
+    double* out_projection_ms = nullptr)
 {
     res = image.clone();
     cv::Mat mask = image.clone();
@@ -798,6 +844,7 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
         cv::putText(res, text, cv::Point(x, y + label_size.height), cv::FONT_HERSHEY_SIMPLEX, 1, {255, 255, 255}, 2);
     }
 
+    const auto projection_start = std::chrono::steady_clock::now();
     for (const auto& point : input_cloud_ptr->points) {
         cv::Point2d img_pt = projectToImagePlane(point, projection_model);
         if (!std::isfinite(img_pt.x) || !std::isfinite(img_pt.y)) {
@@ -839,6 +886,10 @@ std::vector<std::vector<pcl::PointXYZI>> drawSegmentObjects(
 
     for (size_t i = 0; i < objects_pointcloud.size(); ++i) {
         objects_pointcloud[i] = refineObjectPointCloud(objects_pointcloud[i], objects_core_flags[i], refine_settings);
+    }
+    const auto projection_end = std::chrono::steady_clock::now();
+    if (out_projection_ms) {
+        *out_projection_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(projection_end - projection_start).count()) / 1000.0;
     }
 
     std::vector<cv::Point3d> object_centroids(objs.size(), cv::Point3d(0, 0, 0));
@@ -969,6 +1020,24 @@ private:
     StageStats stat_publish_ms_;
     StageStats stat_sync_skew_s_;
 
+    // Latency stats aligned with the document (Section 5.2)
+    bool enable_latency_stats_ = true;
+    double latency_log_period_sec_ = 5.0;
+    ros::Time latency_last_log_time_;
+    // 一、视觉推理模块
+    StageStats stat_vision_infer_ms_;
+    // 二、点云投影与图像关联模块
+    StageStats stat_cloud_preprocess_ms_;
+    StageStats stat_tf_lookup_ms_;
+    StageStats stat_projection_assoc_ms_;
+    StageStats stat_organize_publish_ms_;
+    // 四、端到端总时延
+    StageStats stat_e2e_total_ms_;
+    // 传感器时延（输入时间戳到回调开始）
+    StageStats stat_sensor_to_callback_ms_;
+    std::string latency_csv_path_;
+    std::ofstream latency_csv_;
+
     bool enable_pointcloud_downsample_ = true;
     double pointcloud_leaf_size_m_ = 0.03;
     ObjectCloudRefineSettings object_cloud_refine_settings_;
@@ -1000,6 +1069,15 @@ private:
         double overlay_ms,
         double publish_ms,
         double sync_skew_s);
+
+    void recordAndMaybeLogLatency(
+        double vision_infer_ms,
+        double cloud_preprocess_ms,
+        double tf_lookup_ms,
+        double projection_assoc_ms,
+        double organize_publish_ms,
+        double e2e_total_ms,
+        double sensor_to_callback_ms);
 };
 
 void RosNode::recordAndMaybeLogPerf(
@@ -1061,6 +1139,83 @@ void RosNode::recordAndMaybeLogPerf(
     stat_publish_ms_.reset();
     stat_sync_skew_s_.reset();
     perf_last_log_time_ = now;
+}
+
+void RosNode::recordAndMaybeLogLatency(
+    double vision_infer_ms,
+    double cloud_preprocess_ms,
+    double tf_lookup_ms,
+    double projection_assoc_ms,
+    double organize_publish_ms,
+    double e2e_total_ms,
+    double sensor_to_callback_ms)
+{
+    if (!enable_latency_stats_) {
+        return;
+    }
+
+    stat_vision_infer_ms_.add(vision_infer_ms);
+    stat_cloud_preprocess_ms_.add(cloud_preprocess_ms);
+    stat_tf_lookup_ms_.add(tf_lookup_ms);
+    stat_projection_assoc_ms_.add(projection_assoc_ms);
+    stat_organize_publish_ms_.add(organize_publish_ms);
+    stat_e2e_total_ms_.add(e2e_total_ms);
+    stat_sensor_to_callback_ms_.add(sensor_to_callback_ms);
+
+    const ros::Time now = ros::Time::now();
+    if (latency_last_log_time_.isZero()) {
+        latency_last_log_time_ = now;
+        return;
+    }
+
+    if ((now - latency_last_log_time_).toSec() < latency_log_period_sec_) {
+        return;
+    }
+
+    auto dump = [](const char* label, const StageStats& s) {
+        ROS_INFO(
+            "[segment latency] %-22s samples=%4zu avg=%6.2f std=%6.2f p95=%6.2f max=%6.2f ms",
+            label, s.count, s.avg(), s.stdDev(), s.p95(), s.max);
+    };
+
+    ROS_INFO("[segment latency] === Module Latency Report ===");
+    dump("vision_infer", stat_vision_infer_ms_);
+    dump("cloud_preprocess", stat_cloud_preprocess_ms_);
+    dump("tf_lookup", stat_tf_lookup_ms_);
+    dump("projection_assoc", stat_projection_assoc_ms_);
+    dump("organize_publish", stat_organize_publish_ms_);
+    dump("e2e_total", stat_e2e_total_ms_);
+    dump("sensor_to_callback", stat_sensor_to_callback_ms_);
+
+    if (latency_csv_.is_open()) {
+        auto write_row = [&](const char* stage, const StageStats& s) {
+            latency_csv_ << std::fixed << std::setprecision(3)
+                         << now.toSec() << ","
+                         << stage << ","
+                         << s.count << ","
+                         << s.avg() << ","
+                         << s.stdDev() << ","
+                         << s.p95() << ","
+                         << s.max << "\n";
+        };
+        write_row("vision_infer", stat_vision_infer_ms_);
+        write_row("cloud_preprocess", stat_cloud_preprocess_ms_);
+        write_row("tf_lookup", stat_tf_lookup_ms_);
+        write_row("projection_assoc", stat_projection_assoc_ms_);
+        write_row("organize_publish", stat_organize_publish_ms_);
+        write_row("e2e_total", stat_e2e_total_ms_);
+        write_row("sensor_to_callback", stat_sensor_to_callback_ms_);
+        latency_csv_.flush();
+    }
+
+    stat_vision_infer_ms_.reset();
+    stat_cloud_preprocess_ms_.reset();
+    stat_tf_lookup_ms_.reset();
+    stat_projection_assoc_ms_.reset();
+    stat_organize_publish_ms_.reset();
+    stat_e2e_total_ms_.reset();
+    stat_sensor_to_callback_ms_.reset();
+    latency_last_log_time_ = now;
 }
 
 void RosNode::updateTemporalMetrics(const cv::Size& image_size, const std::vector<SegmentObject>& objs)
@@ -1293,20 +1448,16 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
     }
 
     const auto callback_start = std::chrono::steady_clock::now();
+    const ros::Time callback_ros_time = ros::Time::now();
+    const double sensor_to_callback_ms = image_header.stamp.isZero() ? 0.0 :
+        std::max(0.0, (callback_ros_time - image_header.stamp).toSec() * 1000.0);
 
+    // 点云预处理（格式转换 + 降采样）
+    const auto cloud_preprocess_start = std::chrono::steady_clock::now();
     auto current_cloud = pcl::PointCloud<pcl::PointXYZI>::Ptr(new pcl::PointCloud<pcl::PointXYZI>());
     pcl::fromROSMsg(*cloud_msg, *current_cloud);
     const auto& current_cloud_header = cloud_msg->header;
 
-    // 图像处理与检测
-    cv::Mat image = image_input;
-    const auto infer_start = std::chrono::steady_clock::now();
-    auto detections = detector_->inference(image);
-    const auto infer_end = std::chrono::steady_clock::now();
-    objs_ = convertDetectionsToObjects(detections, image.size(), object_cloud_refine_settings_);
-    const auto convert_end = std::chrono::steady_clock::now();
-
-    const auto downsample_start = std::chrono::steady_clock::now();
     pcl::PointCloud<pcl::PointXYZI>::Ptr processing_cloud = current_cloud;
     if (enable_pointcloud_downsample_ && current_cloud && !current_cloud->points.empty()) {
         pcl::PointCloud<pcl::PointXYZI>::Ptr filtered_cloud(new pcl::PointCloud<pcl::PointXYZI>());
@@ -1321,9 +1472,15 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
             processing_cloud = filtered_cloud;
         }
     }
-    const auto downsample_end = std::chrono::steady_clock::now();
+    const auto cloud_preprocess_end = std::chrono::steady_clock::now();
 
-    pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_cloud;
+    // 图像预处理与推理
+    cv::Mat image = image_input;
+    const auto infer_start = std::chrono::steady_clock::now();
+    auto detections = detector_->inference(image);
+    const auto infer_end = std::chrono::steady_clock::now();
+    objs_ = convertDetectionsToObjects(detections, image.size(), object_cloud_refine_settings_);
+    const auto convert_end = std::chrono::steady_clock::now();
 
     const ros::Duration stamp_delta = image_header.stamp - cloud_msg->header.stamp;
     const double stamp_delta_sec = std::fabs(stamp_delta.toSec());
@@ -1341,6 +1498,7 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
         sync_skew_logged_ = true;
     }
 
+    // 坐标查询与变换
     ProjectionModel active_projection_model = projection_model_;
     const ros::Time transform_stamp = cloud_msg->header.stamp.isZero() ? image_header.stamp : cloud_msg->header.stamp;
     const auto tf_start = std::chrono::steady_clock::now();
@@ -1362,9 +1520,13 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
         yaml_fallback_logged_ = true;
     }
 
+    pcl::PointCloud<pcl::PointXYZRGB>::Ptr colored_cloud;
+
+    // 投影与像素关联 + 可视化绘制
     const auto draw_start = std::chrono::steady_clock::now();
     cv::Mat image_to_show;
     cv::Mat pure_segmentation;
+    double projection_assoc_ms = 0.0;
     pointcloud_vec = drawSegmentObjects(
         image,
         img_res_,
@@ -1377,7 +1539,8 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
         active_projection_model,
         object_cloud_refine_settings_,
         &image_to_show,
-        &pure_segmentation);
+        &pure_segmentation,
+        &projection_assoc_ms);
     const auto draw_end = std::chrono::steady_clock::now();
 
     auto tc = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(infer_end - infer_start).count()) / 1000.;
@@ -1389,17 +1552,11 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
         ROS_WARN_THROTTLE(2.0, "No point cloud data available for projection.");
     }
 
-    // Legacy grid-based risk area and alarm path has been removed.
-    // A new danger-area and early-warning pipeline will be added here.
-
-    // 后续图像和点云的处理与发布
-    const auto overlay_start = std::chrono::steady_clock::now();
+    // 结果组织与发布
+    const auto organize_publish_start = std::chrono::steady_clock::now();
     if (image_to_show.empty()) {
         image_to_show = img_res_.clone();
     }
-    const auto overlay_end = std::chrono::steady_clock::now();
-
-    const auto publish_start = std::chrono::steady_clock::now();
     sensor_msgs::ImagePtr msg_img_new = cv_bridge::CvImage(image_header, "bgr8", img_res_).toImageMsg();
     sensor_msgs::ImagePtr msg_img_new_pc = cv_bridge::CvImage(image_header, "bgr8", image_to_show).toImageMsg();
     sensor_msgs::ImagePtr msg_pure_img = cv_bridge::CvImage(image_header, "bgr8", pure_segmentation).toImageMsg();
@@ -1420,17 +1577,26 @@ void RosNode::processFrame(const std_msgs::Header& image_header, const cv::Mat& 
     pub_color_cloud_.publish(output_cloud_msg);
     const auto publish_end = std::chrono::steady_clock::now();
 
+    // Legacy perf stats (keep for backward compatibility)
     const double infer_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(infer_end - infer_start).count()) / 1000.0;
     const double convert_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(convert_end - infer_end).count()) / 1000.0;
-    const double downsample_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(downsample_end - downsample_start).count()) / 1000.0;
+    const double downsample_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(cloud_preprocess_end - cloud_preprocess_start).count()) / 1000.0;
     const double tf_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(tf_end - tf_start).count()) / 1000.0;
     const double draw_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(draw_end - draw_start).count()) / 1000.0;
-    const double overlay_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(overlay_end - overlay_start).count()) / 1000.0;
-    const double publish_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - publish_start).count()) / 1000.0;
+    const double overlay_ms = 0.0;
+    const double publish_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - organize_publish_start).count()) / 1000.0;
     const double total_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - callback_start).count()) / 1000.0;
     updateTemporalMetrics(image.size(), objs_);
     maybeLogTemporalMetrics();
     recordAndMaybeLogPerf(total_ms, infer_ms, convert_ms, downsample_ms, tf_ms, draw_ms, overlay_ms, publish_ms, stamp_delta_sec);
+
+    // New latency stats aligned with the document
+    const double vision_infer_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(convert_end - infer_start).count()) / 1000.0;
+    const double cloud_preprocess_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(cloud_preprocess_end - cloud_preprocess_start).count()) / 1000.0;
+    const double tf_lookup_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(tf_end - tf_start).count()) / 1000.0;
+    const double organize_publish_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - organize_publish_start).count()) / 1000.0;
+    const double e2e_total_ms = static_cast<double>(std::chrono::duration_cast<std::chrono::microseconds>(publish_end - callback_start).count()) / 1000.0;
+    recordAndMaybeLogLatency(vision_infer_ms, cloud_preprocess_ms, tf_lookup_ms, projection_assoc_ms, organize_publish_ms, e2e_total_ms, sensor_to_callback_ms);
 }
 
 RosNode::RosNode()
@@ -1470,6 +1636,9 @@ RosNode::RosNode()
     n_.param<bool>("enable_temporal_metrics", enable_temporal_metrics_, enable_temporal_metrics_);
     n_.param<double>("temporal_metrics_log_period_sec", temporal_metrics_log_period_sec_, temporal_metrics_log_period_sec_);
     n_.param<std::string>("temporal_metrics_csv_path", temporal_metrics_csv_path_, temporal_metrics_csv_path_);
+    n_.param<bool>("enable_latency_stats", enable_latency_stats_, enable_latency_stats_);
+    n_.param<double>("latency_log_period_sec", latency_log_period_sec_, latency_log_period_sec_);
+    n_.param<std::string>("latency_csv_path", latency_csv_path_, latency_csv_path_);
     class_names_ = readClassNamesParam(n_);
     engine_file_path_ = pkg_path_ + "/weights/" + weight_name_;
     projection_model_.loadFromFile(projection_config_path_);
@@ -1504,6 +1673,9 @@ RosNode::RosNode()
     std::cout << "\033[1;32m--temporal_metrics   : " << (enable_temporal_metrics_ ? "true" : "false") << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--temporal_log_period: " << temporal_metrics_log_period_sec_ << "\033[0m" << std::endl;
     std::cout << "\033[1;32m--temporal_csv_path  : " << temporal_metrics_csv_path_ << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--enable_latency_stats: " << (enable_latency_stats_ ? "true" : "false") << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--latency_log_period : " << latency_log_period_sec_ << "\033[0m" << std::endl;
+    std::cout << "\033[1;32m--latency_csv_path   : " << latency_csv_path_ << "\033[0m" << std::endl;
     if (class_names_.empty()) {
         ROS_WARN("No 'class_names' parameter provided. Falling back to generated labels like class0/class1.");
     } else {
@@ -1518,6 +1690,17 @@ RosNode::RosNode()
             ROS_INFO("Temporal metrics CSV: %s", temporal_metrics_csv_path_.c_str());
         } else {
             ROS_WARN("Failed to open temporal metrics CSV: %s", temporal_metrics_csv_path_.c_str());
+        }
+    }
+
+    if (enable_latency_stats_ && !latency_csv_path_.empty()) {
+        latency_csv_.open(latency_csv_path_, std::ios::out | std::ios::trunc);
+        if (latency_csv_.is_open()) {
+            latency_csv_ << "timestamp,stage,samples,avg_ms,std_ms,p95_ms,max_ms\n";
+            latency_csv_.flush();
+            ROS_INFO("Latency CSV: %s", latency_csv_path_.c_str());
+        } else {
+            ROS_WARN("Failed to open latency CSV: %s", latency_csv_path_.c_str());
         }
     }
 

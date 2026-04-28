@@ -8,6 +8,9 @@
   <arg name="map_static_cloud_topic" default="/lio_sam/mapping/map_local"/>
   <arg name="deskewed_static_cloud_topic" default="/lio_sam/deskew/cloud_deskewed"/>
   <arg name="filtered_static_cloud_topic" default="/warning/static_cloud_filtered"/>
+  <arg name="enable_latency_stats" default="true"/>
+  <arg name="latency_log_period_sec" default="5.0"/>
+  <arg name="latency_csv_path" default="/tmp/latency_warning_evaluator.csv"/>
 
   <rosparam command="load" file="$(arg config)"/>
   <rosparam command="load" file="$(arg self_filter_config)"/>
@@ -24,5 +27,8 @@
     <param name="monitored_source_mode" value="$(arg monitored_source_mode)"/>
     <param name="visual_objects_topic" value="$(arg visual_objects_topic)"/>
     <param name="static_cloud_topic" value="$(arg filtered_static_cloud_topic)"/>
+    <param name="enable_latency_stats" value="$(arg enable_latency_stats)"/>
+    <param name="latency_log_period_sec" value="$(arg latency_log_period_sec)"/>
+    <param name="latency_csv_path" value="$(arg latency_csv_path)"/>
   </node>
 </launch>

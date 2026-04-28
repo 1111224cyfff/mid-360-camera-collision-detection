@@ -1,2 +1,5 @@
 1.先启动ptp_sync等待成功提示
 2.collect_data开始采集数据
+
+我现在提供给你了一份静态预警效果测试_操作手册.md，里面讲解了流程。我提供给你两个gt文件，都在/data目录下。请帮我完成指标的计算。
+prediction.csv并不存在，需要生成。对于空钩的csv，倍率0.5，延迟12s；对于标准节，倍率0.5，延迟9.154s。目前先处理标准节，对应的是/home/nvidia/ws_livox/data/tower_crane_section_raw.bag。具体的消息发布和格式，你可以查阅代码

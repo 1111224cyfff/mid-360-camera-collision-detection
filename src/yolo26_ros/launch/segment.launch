@@ -30,6 +30,9 @@
     <arg name="enable_temporal_metrics" default="false" />
     <arg name="temporal_metrics_log_period_sec" default="5.0" />
     <arg name="temporal_metrics_csv_path" default="" />
+    <arg name="enable_latency_stats" default="true" />
+    <arg name="latency_log_period_sec" default="5.0" />
+    <arg name="latency_csv_path" default="/tmp/latency_segment.csv" />
     <arg name="class_names" default="['tower_crane_section','barrier']" />
 
     <param name="topic_img" type="string" value="$(arg topic_img)" />
@@ -63,6 +66,9 @@
     <param name="enable_temporal_metrics" type="bool" value="$(arg enable_temporal_metrics)" />
     <param name="temporal_metrics_log_period_sec" type="double" value="$(arg temporal_metrics_log_period_sec)" />
     <param name="temporal_metrics_csv_path" type="string" value="$(arg temporal_metrics_csv_path)" />
+    <param name="enable_latency_stats" type="bool" value="$(arg enable_latency_stats)" />
+    <param name="latency_log_period_sec" type="double" value="$(arg latency_log_period_sec)" />
+    <param name="latency_csv_path" type="string" value="$(arg latency_csv_path)" />
     <rosparam param="class_names" subst_value="true">$(arg class_names)</rosparam>
 
     <node pkg="yolo26_ros" name="segment" type="segment" output="screen" />

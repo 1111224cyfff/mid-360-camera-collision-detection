@@ -1,10 +1,16 @@
 <launch>
   <arg name="config" default="$(find lio_sam)/config/dynamic_tracker.yaml"/>
   <arg name="output_frame" default="map"/>
+  <arg name="enable_latency_stats" default="true"/>
+  <arg name="latency_log_period_sec" default="5.0"/>
+  <arg name="latency_csv_path" default="/tmp/latency_dynamic_tracker.csv"/>
 
   <rosparam command="load" file="$(arg config)"/>
 
   <node pkg="lio_sam" type="lio_sam_dynamicTracker" name="dynamic_tracker" output="screen" ns="/">
     <param name="output_frame" value="$(arg output_frame)"/>
+    <param name="enable_latency_stats" value="$(arg enable_latency_stats)"/>
+    <param name="latency_log_period_sec" value="$(arg latency_log_period_sec)"/>
+    <param name="latency_csv_path" value="$(arg latency_csv_path)"/>
   </node>
 </launch>

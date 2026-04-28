@@ -2,12 +2,13 @@
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier.bag" /> -->
   <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section_raw.bag" />
+  <arg name="bag_play_rate" default="0.5" />
   
-  <arg name="livox_merge_rviz" default="true" />
+  <arg name="livox_merge_rviz" default="false" />
   <arg name="detector_rviz" default="false" />
   <arg name="lio_sam_rviz" default="false" />
   <arg name="enable_segment" default="true" />
-  <arg name="segment_rviz" default="true" />
+  <arg name="segment_rviz" default="false" />
   <arg name="launch_rviz" default="$(arg segment_rviz)" />
   <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
   <arg name="camera_frame_transform_delay_sec" default="4" />
@@ -39,9 +40,18 @@
   <arg name="segment_sync_max_interval_sec" default="0.05" />
   <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
   <arg name="segment_object_radius_padding_m" default="0.2" />
-  <arg name="segment_enable_temporal_metrics" default="true" />
+  <arg name="segment_enable_temporal_metrics" default="false" />
   <arg name="segment_temporal_metrics_log_period_sec" default="5.0" />
   <arg name="segment_temporal_metrics_csv_path" default="/home/nvidia/ws_livox/tmp/segment_metrics.csv" />
+  <arg name="segment_enable_latency_stats" default="true" />
+  <arg name="segment_latency_log_period_sec" default="5.0" />
+  <arg name="segment_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_segment.csv" />
+  <arg name="dynamic_tracker_enable_latency_stats" default="true" />
+  <arg name="dynamic_tracker_latency_log_period_sec" default="5.0" />
+  <arg name="dynamic_tracker_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_dynamic_tracker.csv" />
+  <arg name="warning_evaluator_enable_latency_stats" default="true" />
+  <arg name="warning_evaluator_latency_log_period_sec" default="5.0" />
+  <arg name="warning_evaluator_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_warning_evaluator.csv" />
   <arg name="enable_warning_evaluator" default="true" />
   <arg name="enable_warning_controller" default="true" />
   <arg name="enable_cylinder_object_source" default="true" />
@@ -101,6 +111,9 @@
   <!-- 启动 dynamic tracker -->
   <include file="$(find lio_sam)/launch/dynamic_tracker.launch">
     <arg name="output_frame" value="$(arg world_frame)" />
+    <arg name="enable_latency_stats" value="$(arg dynamic_tracker_enable_latency_stats)" />
+    <arg name="latency_log_period_sec" value="$(arg dynamic_tracker_latency_log_period_sec)" />
+    <arg name="latency_csv_path" value="$(arg dynamic_tracker_latency_csv_path)" />
   </include>
 
   <group if="$(arg enable_warning_evaluator)">
@@ -121,6 +134,9 @@
       <arg name="monitored_source_mode" value="$(arg warning_source_mode)" />
       <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
       <arg name="static_cloud_source" value="$(arg warning_static_cloud_source)" />
+      <arg name="enable_latency_stats" value="$(arg warning_evaluator_enable_latency_stats)" />
+      <arg name="latency_log_period_sec" value="$(arg warning_evaluator_latency_log_period_sec)" />
+      <arg name="latency_csv_path" value="$(arg warning_evaluator_latency_csv_path)" />
     </include>
   </group>
 
@@ -148,6 +164,9 @@
       <arg name="enable_temporal_metrics" value="$(arg segment_enable_temporal_metrics)" />
       <arg name="temporal_metrics_log_period_sec" value="$(arg segment_temporal_metrics_log_period_sec)" />
       <arg name="temporal_metrics_csv_path" value="$(arg segment_temporal_metrics_csv_path)" />
+      <arg name="enable_latency_stats" value="$(arg segment_enable_latency_stats)" />
+      <arg name="latency_log_period_sec" value="$(arg segment_latency_log_period_sec)" />
+      <arg name="latency_csv_path" value="$(arg segment_latency_csv_path)" />
     </include>
   </group>
 
@@ -162,7 +181,7 @@
   <node pkg="rosbag"
         type="play"
         name="rosbag_play"
-        args="-r 0.5 $(arg bag_file)"
+      args="-r $(arg bag_play_rate) $(arg bag_file)"
         launch-prefix="bash -c 'sleep 1; exec $0 $@'"
         output="screen" />
 

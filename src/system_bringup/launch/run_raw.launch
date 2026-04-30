@@ -1,16 +1,21 @@
 <launch>
+  <!-- ==================== 数据源配置 ==================== -->
   <!-- rosbag 路径变量：需要切换 bag 时只改这里/或 launch 时覆盖 -->
   <!-- <arg name="bag_file" default="/home/nvidia/ws_livox/data/barrier.bag" /> -->
   <arg name="bag_file" default="/home/nvidia/ws_livox/data/tower_crane_section_raw.bag" />
-  <arg name="bag_play_rate" default="0.5" />
-  
+  <arg name="bag_play_rate" default="1" />
+
+  <!-- ==================== 可视化开关 ==================== -->
   <arg name="livox_merge_rviz" default="false" />
   <arg name="detector_rviz" default="false" />
   <arg name="lio_sam_rviz" default="false" />
   <arg name="enable_segment" default="true" />
-  <arg name="segment_rviz" default="false" />
+  <arg name="segment_rviz" default="true" />
+  <!-- launch_rviz 统一由 segment_rviz 控制，避免多个 rviz 窗口 -->
   <arg name="launch_rviz" default="$(arg segment_rviz)" />
   <arg name="rviz_config" default="$(find system_bringup)/rviz/system_bringup.rviz" />
+
+  <!-- ==================== 相机/水平化/建图参数 ==================== -->
   <arg name="camera_frame_transform_delay_sec" default="4" />
   <!-- rosbag 回放常在轻微运动中起步；这里放宽一次性水平化门槛，避免 LIO-SAM 长时间无输入。 -->
   <arg name="leveler_calib_duration_sec" default="2.0" />
@@ -20,16 +25,22 @@
   <!-- body_leveled 用于传感器侧水平化；LIO-SAM 与下游保持原有 odom/map 世界系。 -->
   <arg name="odometry_frame" default="odom" />
   <arg name="world_frame" default="map" />
+
+  <!-- ==================== 近场 ROI 配置 ==================== -->
+  <!-- 从 registered cloud 中裁剪机器人周围一定半径范围内的点云，降低下游计算量 -->
   <arg name="enable_near_field_roi" default="true" />
   <arg name="near_field_roi_output_topic" default="/perception/near_field_cloud_registered" />
   <arg name="near_field_roi_frame" default="body_leveled" />
   <arg name="near_field_roi_xy_radius" default="10.0" />
 
+  <!-- ==================== 视觉分割配置 ==================== -->
+  <!-- 订阅 leveled 后的 raw 图像 + 水平化点云，做图像-点云融合分割 -->
   <arg name="camera_raw_image_topic" default="/hikrobot_camera/rgb" />
   <arg name="segment_raw_image_topic" default="/hikrobot_camera/rgb/leveled" />
   <arg name="segment_pointcloud_topic" default="/merged_pointcloud_leveled" />
   <arg name="segment_result_topic" default="/segment/image_raw" />
   <arg name="segment_result_pc_topic" default="/segment/topic_res_img_pc_" />
+  <!-- 纯分割图像（无点云投影叠加），用于可视化或调试 -->
   <arg name="segment_pure_image_topic" default="/segment/pure_image_raw" />
   <arg name="segment_weight_name" default="20260420.engine" />
   <arg name="segment_launch_file" default="$(find yolo26_ros)/launch/segment.launch" />
@@ -40,31 +51,44 @@
   <arg name="segment_sync_max_interval_sec" default="0.05" />
   <arg name="segment_tf_lookup_timeout_sec" default="0.02" />
   <arg name="segment_object_radius_padding_m" default="0.2" />
-  <arg name="segment_enable_temporal_metrics" default="false" />
-  <arg name="segment_temporal_metrics_log_period_sec" default="5.0" />
-  <arg name="segment_temporal_metrics_csv_path" default="/home/nvidia/ws_livox/tmp/segment_metrics.csv" />
-  <arg name="segment_enable_latency_stats" default="true" />
-  <arg name="segment_latency_log_period_sec" default="5.0" />
-  <arg name="segment_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_segment.csv" />
-  <arg name="dynamic_tracker_enable_latency_stats" default="true" />
-  <arg name="dynamic_tracker_latency_log_period_sec" default="5.0" />
-  <arg name="dynamic_tracker_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_dynamic_tracker.csv" />
-  <arg name="warning_evaluator_enable_latency_stats" default="true" />
-  <arg name="warning_evaluator_latency_log_period_sec" default="5.0" />
-  <arg name="warning_evaluator_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_warning_evaluator.csv" />
+
+  <!-- ==================== 预警参数 ==================== -->
   <arg name="enable_warning_evaluator" default="true" />
   <arg name="enable_warning_controller" default="true" />
   <arg name="enable_cylinder_object_source" default="true" />
-    <!-- 当前 tower_crane_section_raw.bag 中，map 系地面高度约在 -9.2m；
-      固定 ground_z 取这个量级，避免圆柱被 0.0 阈值整帧抑制。 -->
+  <!-- 当前 tower_crane_section_raw.bag 中，map 系地面高度约在 -9.2m；
+    固定 ground_z 取这个量级，避免圆柱被 0.0 阈值整帧抑制。 -->
   <arg name="cylinder_ground_contact_mode" default="fixed_ground_z" />
     <arg name="cylinder_fixed_ground_z" default="-7.0" />
   <!-- 同时启用 visual 静态距离预警和圆柱动态预警。 -->
-  <arg name="warning_source_mode" default="cylinder" />
+  <arg name="warning_source_mode" default="both" />
   <arg name="warning_static_cloud_source" default="deskew" />
   <arg name="selected_visual_objects_topic" default="/warning/selected_visual_object_states" />
 
-  <!-- 启动相机 tf 转换。raw 图像直接进入后续链路，不再经过压缩/解压重发。 -->
+  <!-- ==================== [调式] 各模块延迟/性能统计 ==================== -->
+  <!-- 记录分割/跟踪/预警各阶段的处理延迟，输出 CSV 用于性能分析；不影响主题链路 -->
+  <arg name="enable_debug_stats" default="true" />
+  <!-- 以上总开关 disable 后所有调式链路关闭；各模块也可独立覆盖 -->
+  <!-- 分割的时序指标统计（帧率、处理间隔抖动等性能时序数据） -->
+  <arg name="segment_enable_temporal_metrics" default="false" />
+  <arg name="segment_temporal_metrics_log_period_sec" default="5.0" />
+  <arg name="segment_temporal_metrics_csv_path" default="/home/nvidia/ws_livox/tmp/segment_metrics.csv" />
+  <!-- 分割节点的延迟统计（从原始图像到分割结果输出的处理耗时） -->
+  <arg name="segment_enable_latency_stats" default="$(eval arg('enable_debug_stats'))" />
+  <arg name="segment_latency_log_period_sec" default="5.0" />
+  <arg name="segment_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_segment.csv" />
+  <!-- 动态跟踪器的延迟统计（检测输入到跟踪状态更新的处理耗时） -->
+  <arg name="dynamic_tracker_enable_latency_stats" default="$(eval arg('enable_debug_stats'))" />
+  <arg name="dynamic_tracker_latency_log_period_sec" default="5.0" />
+  <arg name="dynamic_tracker_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_dynamic_tracker.csv" />
+  <!-- 预警评估模块的延迟统计（风险计算的端到端处理耗时） -->
+  <arg name="warning_evaluator_enable_latency_stats" default="$(eval arg('enable_debug_stats'))" />
+  <arg name="warning_evaluator_latency_log_period_sec" default="5.0" />
+  <arg name="warning_evaluator_latency_csv_path" default="/home/nvidia/ws_livox/tmp/latency_warning_evaluator.csv" />
+
+  <!-- ==================== 数据流：图像坐标系变换 ==================== -->
+  <!-- 将相机 raw 图像（原始坐标系）通过 tf 变换到 leveled 坐标系，输出给下游分割。 -->
+  <!-- raw 图像直接进入后续链路，不再经过压缩/解压重发。 -->
   <include file="$(find hikrobot_camera)/launch/camera_frame_transform.launch">
     <arg name="input_topic" value="$(arg camera_raw_image_topic)" />
     <arg name="output_topic" value="$(arg segment_raw_image_topic)" />
@@ -72,12 +96,14 @@
     <arg name="launch_prefix" value="bash -c 'sleep $(arg camera_frame_transform_delay_sec); exec $0 $@'" />
   </include>
 
-  <!-- 启动 Livox merge -->
+  <!-- ==================== 数据流：多 LiDAR 点云融合 ==================== -->
+  <!-- 将多台 Livox MID360 的点云合并为单一 topic，供下游水平化和建图使用 -->
   <include file="$(find livox_merge)/launch/livox_merge.launch">
     <arg name="rviz" value="$(arg livox_merge_rviz)" />
   </include>
 
-  <!-- 启动一次性点云水平化（基于 /merged_imu 的加速度平均估计上方向） -->
+  <!-- ==================== 数据流：点云水平化 ==================== -->
+  <!-- 基于 /merged_imu 的加速度平均估计上方向，将 merge 后的点云一次性变换到水平坐标系 -->
   <include file="$(find livox_merge)/launch/merged_pointcloud_leveler.launch">
     <arg name="calib_duration_sec" value="$(arg leveler_calib_duration_sec)" />
     <arg name="min_imu_samples" value="$(arg leveler_min_imu_samples)" />
@@ -90,13 +116,15 @@
         name="base_to_body_tf"
         args="0 0 0 0 0 0 base_link body" />
 
-  <!-- 启动 LIO-SAM (6-axis) -->
+  <!-- ==================== 核心 SLAM：LIO-SAM (6-axis) ==================== -->
+  <!-- 紧耦合 LiDAR-IMU 里程计与建图，输出 odom/map 世界系下的位姿和 registered cloud -->
   <include file="$(find lio_sam)/launch/run6axis.launch">
     <arg name="launch_rviz" value="$(arg lio_sam_rviz)" />
     <arg name="use_accel_tilt_for_6axis" value="false" />
   </include>
 
-  <!-- 启动 M-detector (MID360) -->
+  <!-- ==================== 运动目标检测 ==================== -->
+  <!-- M-detector 订阅 LIO-SAM 的 registered cloud，检测运动目标并输出动态物体信息 -->
   <include file="$(find m_detector)/launch/detector_mid360_lio_sam.launch">
     <arg name="rviz" value="$(arg detector_rviz)" />
     <arg name="rviz_node_name" value="m_detector_rviz" />
@@ -108,14 +136,20 @@
     <arg name="near_field_roi_xy_radius" value="$(arg near_field_roi_xy_radius)" />
   </include>
 
-  <!-- 启动 dynamic tracker -->
+  <!-- ==================== 动态目标跟踪 ==================== -->
+  <!-- 维护动态目标的跟踪生命周期（ID 分配、轨迹预测、消失判定） -->
   <include file="$(find lio_sam)/launch/dynamic_tracker.launch">
+    <!-- 主题参数 -->
     <arg name="output_frame" value="$(arg world_frame)" />
+    <!-- [调式] 延迟统计 -->
     <arg name="enable_latency_stats" value="$(arg dynamic_tracker_enable_latency_stats)" />
     <arg name="latency_log_period_sec" value="$(arg dynamic_tracker_latency_log_period_sec)" />
     <arg name="latency_csv_path" value="$(arg dynamic_tracker_latency_csv_path)" />
   </include>
 
+  <!-- ==================== 预警评估与控制器 ==================== -->
+  <!-- warning_evaluator：根据动态目标/静态地图/视觉检测结果综合评估碰撞风险 -->
+  <!-- warning_controller：将风险信号转换为具体预警指令（声光报警等） -->
   <group if="$(arg enable_warning_evaluator)">
     <include file="$(find lio_sam)/launch/visual_object_selector.launch">
       <arg name="output_topic" value="$(arg selected_visual_objects_topic)" />
@@ -130,10 +164,12 @@
     </group>
 
     <include file="$(find lio_sam)/launch/warning_evaluator.launch">
+      <!-- 主题参数 -->
       <arg name="output_frame" value="$(arg world_frame)" />
       <arg name="monitored_source_mode" value="$(arg warning_source_mode)" />
       <arg name="visual_objects_topic" value="$(arg selected_visual_objects_topic)" />
       <arg name="static_cloud_source" value="$(arg warning_static_cloud_source)" />
+      <!-- [调式] 延迟统计 -->
       <arg name="enable_latency_stats" value="$(arg warning_evaluator_enable_latency_stats)" />
       <arg name="latency_log_period_sec" value="$(arg warning_evaluator_latency_log_period_sec)" />
       <arg name="latency_csv_path" value="$(arg warning_evaluator_latency_csv_path)" />
@@ -144,9 +180,12 @@
     <include file="$(find lio_sam)/launch/warning_controller.launch" />
   </group>
 
+  <!-- ==================== 视觉分割（图像-点云融合） ==================== -->
+  <!-- 基于 YOLO 的实时图像-点云融合分割，输出障碍物检测结果 -->
   <group if="$(arg enable_segment)">
     <!-- 启动图像-点云分割投影，直接订阅 leveled raw 图像。 -->
     <include file="$(arg segment_launch_file)">
+      <!-- 主题参数 -->
       <arg name="topic_img" value="$(arg segment_raw_image_topic)" />
       <arg name="use_compressed_image" value="false" />
       <arg name="topic_pointcloud" value="$(arg segment_pointcloud_topic)" />
@@ -161,15 +200,18 @@
       <arg name="sync_max_interval_sec" value="$(arg segment_sync_max_interval_sec)" />
       <arg name="tf_lookup_timeout_sec" value="$(arg segment_tf_lookup_timeout_sec)" />
       <arg name="object_radius_padding_m" value="$(arg segment_object_radius_padding_m)" />
+      <!-- [调式] 时序指标 -->
       <arg name="enable_temporal_metrics" value="$(arg segment_enable_temporal_metrics)" />
       <arg name="temporal_metrics_log_period_sec" value="$(arg segment_temporal_metrics_log_period_sec)" />
       <arg name="temporal_metrics_csv_path" value="$(arg segment_temporal_metrics_csv_path)" />
+      <!-- [调式] 延迟统计 -->
       <arg name="enable_latency_stats" value="$(arg segment_enable_latency_stats)" />
       <arg name="latency_log_period_sec" value="$(arg segment_latency_log_period_sec)" />
       <arg name="latency_csv_path" value="$(arg segment_latency_csv_path)" />
     </include>
   </group>
 
+  <!-- ==================== 可视化（Rviz） ==================== -->
   <node pkg="rviz"
         type="rviz"
         name="system_bringup_rviz"
@@ -177,6 +219,7 @@
         if="$(arg launch_rviz)"
         output="screen" />
 
+  <!-- ==================== rosbag 回放 ==================== -->
   <!-- 固定 rosbag 播放（延时 1 秒，确保订阅者就绪）。整个流程只保留一个播放器。 -->
   <node pkg="rosbag"
         type="play"

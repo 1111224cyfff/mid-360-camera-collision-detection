@@ -63,3 +63,8 @@ warning_evaluator:
   notice_ttc: 3.0
   warning_ttc: 2.0
   emergency_ttc: 1.0
+
+  enable_benchmark: true
+  benchmark_runs_per_test: 100
+  benchmark_period_sec: 5.0
+  benchmark_csv_path: "/home/nvidia/ws_livox/tmp/static_clearance_benchmark.csv"

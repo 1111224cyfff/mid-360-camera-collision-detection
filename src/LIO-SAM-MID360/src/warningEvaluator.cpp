@@ -427,6 +427,22 @@ public:
       }
     }
 
+    pnh_.param<bool>("enable_benchmark", enable_benchmark_, false);
+    pnh_.param<int>("benchmark_runs_per_test", benchmark_runs_per_test_, 100);
+    pnh_.param<double>("benchmark_period_sec", benchmark_period_sec_, 5.0);
+    pnh_.param<std::string>("benchmark_csv_path", benchmark_csv_path_, std::string());
+
+    if (enable_benchmark_ && !benchmark_csv_path_.empty()) {
+      benchmark_csv_.open(benchmark_csv_path_, std::ios::out | std::ios::trunc);
+      if (benchmark_csv_.is_open()) {
+        benchmark_csv_ << "timestamp,cloud_size,brute_force_ms,kdtree_ms,speedup\n";
+        benchmark_csv_.flush();
+        ROS_INFO("Benchmark CSV: %s", benchmark_csv_path_.c_str());
+      } else {
+        ROS_WARN("Failed to open benchmark CSV: %s", benchmark_csv_path_.c_str());
+      }
+    }
+
     monitored_source_mode_ = parseMonitoredSourceMode(monitored_source_mode_raw_);
     loadMonitoredClassNames();
 
@@ -864,6 +880,14 @@ private:
         }
       }
 
+      if (enable_benchmark_) {
+        const ros::Time now = ros::Time::now();
+        if (last_benchmark_time_.isZero() || (now - last_benchmark_time_).toSec() >= benchmark_period_sec_) {
+          runStaticClearanceBenchmark(evaluation.monitored_pose_output, inflated_object_radius);
+          last_benchmark_time_ = now;
+        }
+      }
+
       StaticEmergencyDebugInfo static_debug_info;
       evaluation.static_clearance = computeStaticClearance(
         evaluation.monitored_pose_output,
@@ -1101,7 +1125,7 @@ private:
   double computeStaticClearance(
     const geometry_msgs::Pose& monitored_pose_output,
     double object_radius,
-    const ros::Time& evaluation_stamp,
+    const ros::Time& /*evaluation_stamp*/,
     StaticEmergencyDebugInfo* debug_info = nullptr)
   {
     if (!static_cloud_ || static_cloud_->empty()) {
@@ -1132,12 +1156,22 @@ private:
     search_point.z = object_pose_cloud.position.z;
     search_point.intensity = 0.0f;
 
+    const double bounded_object_radius = std::max(0.0, object_radius);
+    const double bounded_object_radius_sq = bounded_object_radius * bounded_object_radius;
+
+    // 最大搜索半径：超出此范围 clearance > notice_clearance，不影响静态分级
+    const double max_search_radius = static_notice_clearance_ + bounded_object_radius;
+
+    std::vector<int> k_indices;
+    std::vector<float> k_sq_distances;
+    const int found = static_kdtree_.radiusSearch(search_point, max_search_radius, k_indices, k_sq_distances);
+
     double nearest_distance_sq = std::numeric_limits<double>::infinity();
     bool found_candidate = false;
     Eigen::Vector3d centroid_accumulator = Eigen::Vector3d::Zero();
-    const double bounded_object_radius = std::max(0.0, object_radius);
-    const double bounded_object_radius_sq = bounded_object_radius * bounded_object_radius;
-    for (const auto& point : static_cloud_->points) {
+
+    for (int i = 0; i < found; ++i) {
+      const auto& point = static_cloud_->points[k_indices[i]];
       if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
         continue;
       }
@@ -1145,10 +1179,7 @@ private:
         continue;
       }
 
-      const double dx = static_cast<double>(point.x) - object_pose_cloud.position.x;
-      const double dy = static_cast<double>(point.y) - object_pose_cloud.position.y;
-      const double dz = static_cast<double>(point.z) - object_pose_cloud.position.z;
-      const double distance_sq = dx * dx + dy * dy + dz * dz;
+      const double distance_sq = static_cast<double>(k_sq_distances[i]);
       if (distance_sq <= bounded_object_radius_sq) {
         continue;
       }
@@ -1198,6 +1229,110 @@ private:
       }
     }
     return clearance;
+  }
+
+  double computeStaticClearanceBruteForce(
+    const geometry_msgs::Pose& monitored_pose_output,
+    double object_radius)
+  {
+    if (!static_cloud_ || static_cloud_->empty()) {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    geometry_msgs::Pose object_pose_cloud = monitored_pose_output;
+    if (!transformPose(
+          monitored_pose_output,
+          output_frame_,
+          latest_static_cloud_msg_.header.frame_id,
+          latest_static_cloud_msg_.header.stamp,
+          &object_pose_cloud)) {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    const double bounded_object_radius = std::max(0.0, object_radius);
+    const double bounded_object_radius_sq = bounded_object_radius * bounded_object_radius;
+
+    double nearest_distance_sq = std::numeric_limits<double>::infinity();
+    bool found_candidate = false;
+
+    for (const auto& point : static_cloud_->points) {
+      if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
+        continue;
+      }
+      if (static_cast<double>(point.z) > object_pose_cloud.position.z) {
+        continue;
+      }
+
+      const double dx = static_cast<double>(point.x) - object_pose_cloud.position.x;
+      const double dy = static_cast<double>(point.y) - object_pose_cloud.position.y;
+      const double dz = static_cast<double>(point.z) - object_pose_cloud.position.z;
+      const double distance_sq = dx * dx + dy * dy + dz * dz;
+      if (distance_sq <= bounded_object_radius_sq) {
+        continue;
+      }
+      if (distance_sq < nearest_distance_sq) {
+        nearest_distance_sq = distance_sq;
+      }
+      found_candidate = true;
+    }
+
+    if (!found_candidate) {
+      return std::numeric_limits<double>::infinity();
+    }
+
+    return std::sqrt(nearest_distance_sq) - bounded_object_radius;
+  }
+
+  void runStaticClearanceBenchmark(
+    const geometry_msgs::Pose& monitored_pose_output,
+    double object_radius)
+  {
+    if (!static_cloud_ || static_cloud_->empty()) {
+      return;
+    }
+
+    const int runs = std::max(1, benchmark_runs_per_test_);
+
+    // Warm-up to ensure TF cache and CPU cache are ready
+    for (int i = 0; i < 3; ++i) {
+      volatile double r1 = computeStaticClearance(monitored_pose_output, object_radius, ros::Time::now(), nullptr);
+      volatile double r2 = computeStaticClearanceBruteForce(monitored_pose_output, object_radius);
+      (void)r1;
+      (void)r2;
+    }
+
+    const auto t_kd_start = std::chrono::steady_clock::now();
+    for (int i = 0; i < runs; ++i) {
+      volatile double r = computeStaticClearance(monitored_pose_output, object_radius, ros::Time::now(), nullptr);
+      (void)r;
+    }
+    const auto t_kd_end = std::chrono::steady_clock::now();
+
+    const auto t_bf_start = std::chrono::steady_clock::now();
+    for (int i = 0; i < runs; ++i) {
+      volatile double r = computeStaticClearanceBruteForce(monitored_pose_output, object_radius);
+      (void)r;
+    }
+    const auto t_bf_end = std::chrono::steady_clock::now();
+
+    const double kd_ns = static_cast<double>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(t_kd_end - t_kd_start).count());
+    const double bf_ns = static_cast<double>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(t_bf_end - t_bf_start).count());
+    const double kd_ms = kd_ns / 1e6 / static_cast<double>(runs);
+    const double bf_ms = bf_ns / 1e6 / static_cast<double>(runs);
+    const double speedup = (kd_ms > 1e-9) ? (bf_ms / kd_ms) : 0.0;
+
+    ROS_INFO("[benchmark] static_clearance: brute_force=%.3f ms, kdtree=%.3f ms, speedup=%.2fx, cloud_size=%zu",
+             bf_ms, kd_ms, speedup, static_cloud_->size());
+
+    if (benchmark_csv_.is_open()) {
+      benchmark_csv_ << std::fixed << std::setprecision(6)
+                     << ros::Time::now().toSec() << ","
+                     << static_cloud_->size() << ","
+                     << bf_ms << "," << kd_ms << "," << speedup << "\n";
+      benchmark_csv_.flush();
+    }
   }
 
   double computeCylinderStaticClearance(
@@ -2317,6 +2452,14 @@ private:
   ObjectMotionState visual_motion_state_;
   ObjectMotionState cylinder_motion_state_;
   std::vector<std::string> monitored_class_names_;
+
+  // Benchmark
+  bool enable_benchmark_{false};
+  int benchmark_runs_per_test_{100};
+  double benchmark_period_sec_{5.0};
+  std::string benchmark_csv_path_;
+  std::ofstream benchmark_csv_;
+  ros::Time last_benchmark_time_;
 
   // Latency stats
   bool enable_latency_stats_{true};

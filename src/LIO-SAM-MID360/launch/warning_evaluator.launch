@@ -11,6 +11,7 @@
   <arg name="enable_latency_stats" default="true"/>
   <arg name="latency_log_period_sec" default="5.0"/>
   <arg name="latency_csv_path" default="/tmp/latency_warning_evaluator.csv"/>
+  <arg name="ground_z_threshold" default="-inf"/>
 
   <rosparam command="load" file="$(arg config)"/>
   <rosparam command="load" file="$(arg self_filter_config)"/>
@@ -20,6 +21,7 @@
     <param name="visual_objects_topic" value="$(arg visual_objects_topic)"/>
     <param name="output_topic" value="$(arg filtered_static_cloud_topic)"/>
     <param name="history_duration_sec" value="$(eval 0.2 if arg('static_cloud_source') == 'deskew' else 3.0)"/>
+    <param name="ground_z_threshold" value="$(arg ground_z_threshold)"/>
   </node>
 
   <node pkg="lio_sam" type="lio_sam_warningEvaluator" name="warning_evaluator" output="screen" ns="/">

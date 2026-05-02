@@ -34,6 +34,7 @@ public:
     pnh_.param<double>("min_object_confidence", min_object_confidence_, 0.35);
     pnh_.param<int>("min_object_points", min_object_points_, 25);
     pnh_.param<double>("min_object_radius_m", min_object_radius_m_, 0.05);
+    pnh_.param<double>("ground_z_threshold", ground_z_threshold_, -std::numeric_limits<double>::infinity());
     nh_.param<bool>("/use_sim_time", use_sim_time_, false);
 
     sub_visual_objects_ = nh_.subscribe(visual_objects_topic_, 3, &StaticCloudSelfFilterNode::visualObjectsCallback, this);
@@ -44,7 +45,8 @@ public:
                     << " visual_objects_topic=" << visual_objects_topic_
                     << " output_topic=" << output_topic_
                     << " history_duration_sec=" << history_duration_sec_
-                    << " radius_margin_m=" << radius_margin_m_);
+                    << " radius_margin_m=" << radius_margin_m_
+                    << " ground_z_threshold=" << ground_z_threshold_);
   }
 
 private:
@@ -82,25 +84,38 @@ private:
     }
     pruneHistory(resolveStamp(msg->header.stamp));
 
-    if (history_spheres_.empty()) {
-      pub_cloud_.publish(*msg);
-      return;
-    }
-
     pcl::PointCloud<pcl::PointXYZI> input_cloud;
     pcl::fromROSMsg(*msg, input_cloud);
 
     pcl::PointCloud<pcl::PointXYZI> filtered_cloud;
     filtered_cloud.points.reserve(input_cloud.points.size());
+
+    std::size_t ground_filtered_count = 0;
+    std::size_t history_filtered_count = 0;
     for (const auto& point : input_cloud.points) {
       if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z)) {
         continue;
       }
-      if (pointInsideHistory(point)) {
+      if (static_cast<double>(point.z) < ground_z_threshold_) {
+        ++ground_filtered_count;
+        continue;
+      }
+      if (!history_spheres_.empty() && pointInsideHistory(point)) {
+        ++history_filtered_count;
         continue;
       }
       filtered_cloud.points.push_back(point);
     }
+
+    ROS_INFO_THROTTLE(
+      2.0,
+      "[static_cloud_self_filter] frame=%s points: input=%zu ground_filtered=%zu history_filtered=%zu output=%zu threshold=%.2f",
+      msg->header.frame_id.c_str(),
+      input_cloud.points.size(),
+      ground_filtered_count,
+      history_filtered_count,
+      filtered_cloud.points.size(),
+      ground_z_threshold_);
 
     filtered_cloud.width = static_cast<uint32_t>(filtered_cloud.points.size());
     filtered_cloud.height = 1;
@@ -389,6 +404,7 @@ private:
   double min_object_confidence_{0.35};
   int min_object_points_{25};
   double min_object_radius_m_{0.05};
+  double ground_z_threshold_{-std::numeric_limits<double>::infinity()};
 
   std::deque<HistorySphere> history_spheres_;
 };

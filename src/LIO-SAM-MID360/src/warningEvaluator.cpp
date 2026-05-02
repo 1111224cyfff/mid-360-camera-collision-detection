@@ -187,6 +187,8 @@ struct VisualLiftDebugInfo
 struct StaticEmergencyDebugInfo
 {
   bool clearance_valid{false};
+  bool has_notice_points{false};
+  bool has_warning_points{false};
   bool has_emergency_points{false};
   std::string frame_id;
   ros::Time stamp;
@@ -195,6 +197,8 @@ struct StaticEmergencyDebugInfo
   geometry_msgs::Point nearest_point;
   geometry_msgs::Point centroid;
   double nearest_clearance{std::numeric_limits<double>::infinity()};
+  std::vector<geometry_msgs::Point> notice_points;
+  std::vector<geometry_msgs::Point> warning_points;
   std::vector<geometry_msgs::Point> emergency_points;
 };
 
@@ -389,20 +393,20 @@ public:
     pnh_.param<double>("visual_object_radius_margin_m", visual_object_radius_margin_m_, 0.15);
     pnh_.param<double>("static_warning_min_lift_height_m", static_warning_min_lift_height_m_, 1.0);
 
-    pnh_.param<double>("static_notice_clearance", static_notice_clearance_, 3.0);
-    pnh_.param<double>("static_warning_clearance", static_warning_clearance_, 2.0);
+    pnh_.param<double>("static_notice_clearance", static_notice_clearance_, 5.0);
+    pnh_.param<double>("static_warning_clearance", static_warning_clearance_, 3.0);
     pnh_.param<double>("static_emergency_clearance", static_emergency_clearance_, 1.0);
     pnh_.param<int>("static_notice_min_points", static_notice_min_points_, 1);
     pnh_.param<int>("static_warning_min_points", static_warning_min_points_, 1);
     pnh_.param<int>("static_emergency_min_points", static_emergency_min_points_, 1);
 
-    pnh_.param<double>("dynamic_notice_clearance", dynamic_notice_clearance_, 2.5);
-    pnh_.param<double>("dynamic_warning_clearance", dynamic_warning_clearance_, 1.5);
-    pnh_.param<double>("dynamic_emergency_clearance", dynamic_emergency_clearance_, 0.8);
+    pnh_.param<double>("dynamic_notice_clearance", dynamic_notice_clearance_, 5.0);
+    pnh_.param<double>("dynamic_warning_clearance", dynamic_warning_clearance_, 3.0);
+    pnh_.param<double>("dynamic_emergency_clearance", dynamic_emergency_clearance_, 1.0);
 
-    pnh_.param<double>("notice_ttc", notice_ttc_sec_, 4.0);
-    pnh_.param<double>("warning_ttc", warning_ttc_sec_, 2.5);
-    pnh_.param<double>("emergency_ttc", emergency_ttc_sec_, 1.0);
+    pnh_.param<double>("notice_ttc", notice_ttc_sec_, 6.0);
+    pnh_.param<double>("warning_ttc", warning_ttc_sec_, 3.0);
+    pnh_.param<double>("emergency_ttc", emergency_ttc_sec_, 1.5);
 
     pnh_.param<double>("default_cylinder_radius", default_cylinder_radius_, 2.0);
     pnh_.param<double>("default_cylinder_height", default_cylinder_height_, 3.0);
@@ -1207,6 +1211,18 @@ private:
           debug_point.z = point.z;
           debug_info->emergency_points.push_back(debug_point);
           centroid_accumulator += Eigen::Vector3d(point.x, point.y, point.z);
+        } else if (point_clearance <= static_warning_clearance_) {
+          geometry_msgs::Point debug_point;
+          debug_point.x = point.x;
+          debug_point.y = point.y;
+          debug_point.z = point.z;
+          debug_info->warning_points.push_back(debug_point);
+        } else if (point_clearance <= static_notice_clearance_) {
+          geometry_msgs::Point debug_point;
+          debug_point.x = point.x;
+          debug_point.y = point.y;
+          debug_point.z = point.z;
+          debug_info->notice_points.push_back(debug_point);
         }
       }
       found_candidate = true;
@@ -1220,6 +1236,8 @@ private:
     if (debug_info) {
       debug_info->clearance_valid = true;
       debug_info->nearest_clearance = clearance;
+      debug_info->has_notice_points = !debug_info->notice_points.empty();
+      debug_info->has_warning_points = !debug_info->warning_points.empty();
       debug_info->has_emergency_points = !debug_info->emergency_points.empty();
       if (debug_info->has_emergency_points) {
         const double count = static_cast<double>(debug_info->emergency_points.size());
@@ -2004,9 +2022,7 @@ private:
     label_marker.color.a = 0.95f;
     std::ostringstream label_stream;
     label_stream << std::fixed << std::setprecision(2);
-    label_stream << selected_object.class_name
-                 << " cls=" << selected_object.class_id
-                 << " r=" << radius;
+    label_stream << "r=" << radius;
     if (static_debug_info.clearance_valid) {
       label_stream << "\nstatic_pts n/w/e="
                    << static_debug_info.support_metrics.notice_point_count << "/"
@@ -2086,64 +2102,109 @@ private:
       markers.markers.push_back(lift_line_marker);
     }
 
-    if (has_static_debug && static_debug_info.has_emergency_points) {
-      visualization_msgs::Marker static_points_marker;
-      static_points_marker.header.stamp = static_debug_info.stamp;
-      static_points_marker.header.frame_id = static_debug_info.frame_id;
-      static_points_marker.ns = "static_emergency_points";
-      static_points_marker.id = 9;
-      static_points_marker.type = visualization_msgs::Marker::POINTS;
-      static_points_marker.action = visualization_msgs::Marker::ADD;
-      static_points_marker.pose.orientation.w = 1.0;
-      static_points_marker.scale.x = 0.5;
-      static_points_marker.scale.y = 0.5;
-      static_points_marker.color.r = 1.0f;
-      static_points_marker.color.g = 0.2f;
-      static_points_marker.color.b = 0.75f;
-      static_points_marker.color.a = 0.95f;
-      static_points_marker.points = static_debug_info.emergency_points;
-      static_points_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
-      markers.markers.push_back(static_points_marker);
-
-      visualization_msgs::Marker static_centroid_marker;
-  static_centroid_marker.header.stamp = static_debug_info.stamp;
-      static_centroid_marker.header.frame_id = static_debug_info.frame_id;
-      static_centroid_marker.ns = "static_emergency_centroid";
-      static_centroid_marker.id = 10;
-      static_centroid_marker.type = visualization_msgs::Marker::SPHERE;
-      static_centroid_marker.action = visualization_msgs::Marker::ADD;
-      static_centroid_marker.pose.orientation.w = 1.0;
-      static_centroid_marker.pose.position = static_debug_info.centroid;
-      static_centroid_marker.scale.x = 0.35;
-      static_centroid_marker.scale.y = 0.35;
-      static_centroid_marker.scale.z = 0.35;
-      static_centroid_marker.color.r = 1.0f;
-      static_centroid_marker.color.g = 0.6f;
-      static_centroid_marker.color.b = 0.9f;
-      static_centroid_marker.color.a = 0.98f;
-      static_centroid_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
-      markers.markers.push_back(static_centroid_marker);
-
-      visualization_msgs::Marker static_lines_marker;
-  static_lines_marker.header.stamp = static_debug_info.stamp;
-      static_lines_marker.header.frame_id = static_debug_info.frame_id;
-      static_lines_marker.ns = "static_emergency_centroid_links";
-      static_lines_marker.id = 11;
-      static_lines_marker.type = visualization_msgs::Marker::LINE_LIST;
-      static_lines_marker.action = visualization_msgs::Marker::ADD;
-      static_lines_marker.pose.orientation.w = 1.0;
-      static_lines_marker.scale.x = 0.03;
-      static_lines_marker.color.r = 1.0f;
-      static_lines_marker.color.g = 0.45f;
-      static_lines_marker.color.b = 0.85f;
-      static_lines_marker.color.a = 0.6f;
-      static_lines_marker.points.reserve(static_debug_info.emergency_points.size() * 2U);
-      for (const auto& emergency_point : static_debug_info.emergency_points) {
-        static_lines_marker.points.push_back(static_debug_info.centroid);
-        static_lines_marker.points.push_back(emergency_point);
+    if (has_static_debug
+        && (static_debug_info.has_notice_points
+            || static_debug_info.has_warning_points
+            || static_debug_info.has_emergency_points)) {
+      if (static_debug_info.has_notice_points) {
+        visualization_msgs::Marker static_notice_marker;
+        static_notice_marker.header.stamp = static_debug_info.stamp;
+        static_notice_marker.header.frame_id = static_debug_info.frame_id;
+        static_notice_marker.ns = "static_notice_points";
+        static_notice_marker.id = 0;
+        static_notice_marker.type = visualization_msgs::Marker::POINTS;
+        static_notice_marker.action = visualization_msgs::Marker::ADD;
+        static_notice_marker.pose.orientation.w = 1.0;
+        static_notice_marker.scale.x = 0.15;
+        static_notice_marker.scale.y = 0.15;
+        static_notice_marker.color.r = 1.0f;
+        static_notice_marker.color.g = 0.85f;
+        static_notice_marker.color.b = 0.2f;
+        static_notice_marker.color.a = 0.8f;
+        static_notice_marker.points = static_debug_info.notice_points;
+        static_notice_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
+        markers.markers.push_back(static_notice_marker);
       }
-      static_lines_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
-      markers.markers.push_back(static_lines_marker);
+
+      if (static_debug_info.has_warning_points) {
+        visualization_msgs::Marker static_warning_marker;
+        static_warning_marker.header.stamp = static_debug_info.stamp;
+        static_warning_marker.header.frame_id = static_debug_info.frame_id;
+        static_warning_marker.ns = "static_warning_points";
+        static_warning_marker.id = 0;
+        static_warning_marker.type = visualization_msgs::Marker::POINTS;
+        static_warning_marker.action = visualization_msgs::Marker::ADD;
+        static_warning_marker.pose.orientation.w = 1.0;
+        static_warning_marker.scale.x = 0.25;
+        static_warning_marker.scale.y = 0.25;
+        static_warning_marker.color.r = 1.0f;
+        static_warning_marker.color.g = 0.6f;
+        static_warning_marker.color.b = 0.0f;
+        static_warning_marker.color.a = 0.85f;
+        static_warning_marker.points = static_debug_info.warning_points;
+        static_warning_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
+        markers.markers.push_back(static_warning_marker);
+      }
+
+      if (static_debug_info.has_emergency_points) {
+        visualization_msgs::Marker static_emergency_marker;
+        static_emergency_marker.header.stamp = static_debug_info.stamp;
+        static_emergency_marker.header.frame_id = static_debug_info.frame_id;
+        static_emergency_marker.ns = "static_emergency_points";
+        static_emergency_marker.id = 0;
+        static_emergency_marker.type = visualization_msgs::Marker::POINTS;
+        static_emergency_marker.action = visualization_msgs::Marker::ADD;
+        static_emergency_marker.pose.orientation.w = 1.0;
+        static_emergency_marker.scale.x = 0.4;
+        static_emergency_marker.scale.y = 0.4;
+        static_emergency_marker.color.r = 1.0f;
+        static_emergency_marker.color.g = 0.1f;
+        static_emergency_marker.color.b = 0.1f;
+        static_emergency_marker.color.a = 0.95f;
+        static_emergency_marker.points = static_debug_info.emergency_points;
+        static_emergency_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
+        markers.markers.push_back(static_emergency_marker);
+
+        visualization_msgs::Marker static_centroid_marker;
+        static_centroid_marker.header.stamp = static_debug_info.stamp;
+        static_centroid_marker.header.frame_id = static_debug_info.frame_id;
+        static_centroid_marker.ns = "static_emergency_centroid";
+        static_centroid_marker.id = 0;
+        static_centroid_marker.type = visualization_msgs::Marker::SPHERE;
+        static_centroid_marker.action = visualization_msgs::Marker::ADD;
+        static_centroid_marker.pose.orientation.w = 1.0;
+        static_centroid_marker.pose.position = static_debug_info.centroid;
+        static_centroid_marker.scale.x = 0.35;
+        static_centroid_marker.scale.y = 0.35;
+        static_centroid_marker.scale.z = 0.35;
+        static_centroid_marker.color.r = 1.0f;
+        static_centroid_marker.color.g = 0.6f;
+        static_centroid_marker.color.b = 0.9f;
+        static_centroid_marker.color.a = 0.98f;
+        static_centroid_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
+        markers.markers.push_back(static_centroid_marker);
+
+        visualization_msgs::Marker static_lines_marker;
+        static_lines_marker.header.stamp = static_debug_info.stamp;
+        static_lines_marker.header.frame_id = static_debug_info.frame_id;
+        static_lines_marker.ns = "static_emergency_centroid_links";
+        static_lines_marker.id = 0;
+        static_lines_marker.type = visualization_msgs::Marker::LINE_LIST;
+        static_lines_marker.action = visualization_msgs::Marker::ADD;
+        static_lines_marker.pose.orientation.w = 1.0;
+        static_lines_marker.scale.x = 0.03;
+        static_lines_marker.color.r = 1.0f;
+        static_lines_marker.color.g = 0.45f;
+        static_lines_marker.color.b = 0.85f;
+        static_lines_marker.color.a = 0.6f;
+        static_lines_marker.points.reserve(static_debug_info.emergency_points.size() * 2U);
+        for (const auto& emergency_point : static_debug_info.emergency_points) {
+          static_lines_marker.points.push_back(static_debug_info.centroid);
+          static_lines_marker.points.push_back(emergency_point);
+        }
+        static_lines_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
+        markers.markers.push_back(static_lines_marker);
+      }
     }
 
     pub_visual_object_markers_.publish(markers);
@@ -2238,9 +2299,7 @@ private:
     std::ostringstream text_stream;
     text_stream.setf(std::ios::fixed);
     text_stream.precision(2);
-    text_stream << "LEVEL=" << levelToText(message.active_level)
-                << " desired=" << levelToText(message.desired_level)
-                << " obj=" << message.monitored_class_name;
+    text_stream << "LEVEL=" << levelToText(message.active_level);
     if (!message.reason.empty()) {
       text_stream << "\nreason=" << message.reason;
     }
@@ -2425,18 +2484,18 @@ private:
   double static_warning_min_lift_height_m_{1.0};
   int visual_object_envelope_outline_segments_{72};
 
-  double static_notice_clearance_{2.5};
-  double static_warning_clearance_{1.5};
-  double static_emergency_clearance_{0.8};
+  double static_notice_clearance_{5.0};
+  double static_warning_clearance_{3.0};
+  double static_emergency_clearance_{1.0};
   int static_notice_min_points_{1};
   int static_warning_min_points_{1};
   int static_emergency_min_points_{1};
-  double dynamic_notice_clearance_{2.0};
-  double dynamic_warning_clearance_{1.2};
-  double dynamic_emergency_clearance_{0.6};
-  double notice_ttc_sec_{3.0};
-  double warning_ttc_sec_{2.0};
-  double emergency_ttc_sec_{1.0};
+  double dynamic_notice_clearance_{5.0};
+  double dynamic_warning_clearance_{3.0};
+  double dynamic_emergency_clearance_{1.0};
+  double notice_ttc_sec_{6.0};
+  double warning_ttc_sec_{3.0};
+  double emergency_ttc_sec_{1.5};
   double default_cylinder_radius_{2.0};
   double default_cylinder_height_{3.0};
   double cylinder_ground_contact_tolerance_{0.15};

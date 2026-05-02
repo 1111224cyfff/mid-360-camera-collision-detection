@@ -37,6 +37,12 @@
 	<arg name="dyn_cluster_min_size" default="20"/>
 	<arg name="dyn_cluster_max_size" default="50000"/>
 
+	<!-- Visual object envelope mask (exclude suspended payload from dynamic detection) -->
+	<arg name="enable_visual_object_mask" default="false"/>
+	<arg name="visual_objects_topic" default="/warning/selected_visual_object_states"/>
+	<arg name="mask_history_duration_sec" default="1.5"/>
+	<arg name="mask_radius_margin_m" default="0.15"/>
+
 	<rosparam command="load" file="$(find m_detector)/config/mid360/mid360.yaml" />
 	<group if="$(arg enable_near_field_roi)">
 		<node pkg="m_detector" type="pointcloud_roi_filter" name="m_detector_near_field_roi_filter" output="screen">
@@ -86,6 +92,11 @@
 			<param name="cluster_min_size" type="int" value="$(arg dyn_cluster_min_size)" />
 			<param name="cluster_max_size" type="int" value="$(arg dyn_cluster_max_size)" />
 			<param name="publish_markers" type="bool" value="true" />
+			<param name="publish_clustered_cloud" type="bool" value="false" />
+			<param name="enable_visual_object_mask" type="bool" value="$(arg enable_visual_object_mask)" />
+			<param name="visual_objects_topic" type="string" value="$(arg visual_objects_topic)" />
+			<param name="history_duration_sec" type="double" value="$(arg mask_history_duration_sec)" />
+			<param name="radius_margin_m" type="double" value="$(arg mask_radius_margin_m)" />
 		</node>
 	</group>
 

@@ -556,7 +556,7 @@ private:
     cylinder_marker.scale.x = 2.0 * radius_m;
     cylinder_marker.scale.y = 2.0 * radius_m;
     cylinder_marker.scale.z = height_m;
-    cylinder_marker.color = makeColor(0.02f, 0.42f, 0.70f, 0.78f);
+    cylinder_marker.color = makeColor(0.1f, 0.75f, 0.95f, 0.88f);
     cylinder_marker.lifetime = ros::Duration(marker_lifetime_sec_);
     markers.markers.push_back(cylinder_marker);
 
@@ -588,19 +588,8 @@ private:
     text_marker.color = makeColor(1.0f, 1.0f, 1.0f, 1.0f);
     std::ostringstream text_stream;
     text_stream << std::fixed << std::setprecision(2);
-    text_stream << "anchor=" << anchor_class_name
-                << " cls=" << anchor_class_id
-                << " top=(" << top_center.x << "," << top_center.y << "," << top_center.z << ")"
-                << " mode=" << ground_contact_mode
-                << " r=" << radius_m
-                << " h=" << height_m
-                << " bottom_z=" << (top_center.z - height_m);
-    if (ground_contact_mode == kFixedGroundZContactMode) {
-      text_stream << " ground_z=" << contact_z_estimate;
-    } else {
-      text_stream << " contact_z=" << contact_z_estimate
-                  << " pts=" << support_points;
-    }
+    text_stream << "r=" << radius_m
+                << " h=" << height_m;
     text_marker.text = text_stream.str();
     text_marker.lifetime = ros::Duration(marker_lifetime_sec_);
     markers.markers.push_back(text_marker);

@@ -43,26 +43,26 @@ warning_evaluator:
   downgrade_hold_sec: 1.0
   publish_markers: true
   visual_object_marker_lifetime_sec: 0.0
-  visual_object_envelope_fill_alpha: 0.35
+  visual_object_envelope_fill_alpha: 0.82
   visual_object_envelope_draw_outline: false
   visual_object_envelope_outline_alpha: 0.95
   visual_object_envelope_outline_width_m: 0.08
   visual_object_envelope_outline_segments: 72
 
-  static_notice_clearance: 2.5
-  static_warning_clearance: 1.5
-  static_emergency_clearance: 0.8
+  static_notice_clearance: 5.0
+  static_warning_clearance: 3.0
+  static_emergency_clearance: 1.0
   static_notice_min_points: 3
   static_warning_min_points: 5
   static_emergency_min_points: 8
 
-  dynamic_notice_clearance: 2.0
-  dynamic_warning_clearance: 1.2
-  dynamic_emergency_clearance: 0.6
+  dynamic_notice_clearance: 5.0
+  dynamic_warning_clearance: 3.0
+  dynamic_emergency_clearance: 1.0
 
-  notice_ttc: 3.0
-  warning_ttc: 2.0
-  emergency_ttc: 1.0
+  notice_ttc: 6.0
+  warning_ttc: 3.0
+  emergency_ttc: 1.5
 
   enable_benchmark: true
   benchmark_runs_per_test: 100

@@ -8,3 +8,6 @@ static_cloud_self_filter:
   min_object_confidence: 0.35
   min_object_points: 25
   min_object_radius_m: 0.05
+  # 地面排除阈值：map系下 z 低于此值的点会被视为地面点而忽略。
+  # 当前 tower_crane_section_raw.bag 地面约 -7.0m；设为 -inf 表示不过滤。
+  ground_z_threshold: 20

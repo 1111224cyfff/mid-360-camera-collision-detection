@@ -272,10 +272,10 @@ private:
         marker.scale.x = std::max(0.01f, maxX - minX);
         marker.scale.y = std::max(0.01f, maxY - minY);
         marker.scale.z = std::max(0.01f, maxZ - minZ);
-        marker.color.r = 0.2f;
-        marker.color.g = 1.0f;
-        marker.color.b = 0.4f;
-        marker.color.a = 0.75f;
+        marker.color.r = 1.0f;
+        marker.color.g = 0.0f;
+        marker.color.b = 0.0f;
+        marker.color.a = 0.9f;
         marker.lifetime = ros::Duration(marker_lifetime_);
         markers_msg.markers.push_back(marker);
       }

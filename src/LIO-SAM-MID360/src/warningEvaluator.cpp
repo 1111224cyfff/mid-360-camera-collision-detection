@@ -195,7 +195,6 @@ struct StaticEmergencyDebugInfo
   StaticSupportMetrics support_metrics;
   geometry_msgs::Point object_position;
   geometry_msgs::Point nearest_point;
-  geometry_msgs::Point centroid;
   double nearest_clearance{std::numeric_limits<double>::infinity()};
   std::vector<geometry_msgs::Point> notice_points;
   std::vector<geometry_msgs::Point> warning_points;
@@ -1172,7 +1171,6 @@ private:
 
     double nearest_distance_sq = std::numeric_limits<double>::infinity();
     bool found_candidate = false;
-    Eigen::Vector3d centroid_accumulator = Eigen::Vector3d::Zero();
 
     for (int i = 0; i < found; ++i) {
       const auto& point = static_cloud_->points[k_indices[i]];
@@ -1210,7 +1208,6 @@ private:
           debug_point.y = point.y;
           debug_point.z = point.z;
           debug_info->emergency_points.push_back(debug_point);
-          centroid_accumulator += Eigen::Vector3d(point.x, point.y, point.z);
         } else if (point_clearance <= static_warning_clearance_) {
           geometry_msgs::Point debug_point;
           debug_point.x = point.x;
@@ -1239,12 +1236,6 @@ private:
       debug_info->has_notice_points = !debug_info->notice_points.empty();
       debug_info->has_warning_points = !debug_info->warning_points.empty();
       debug_info->has_emergency_points = !debug_info->emergency_points.empty();
-      if (debug_info->has_emergency_points) {
-        const double count = static_cast<double>(debug_info->emergency_points.size());
-        debug_info->centroid.x = centroid_accumulator.x() / count;
-        debug_info->centroid.y = centroid_accumulator.y() / count;
-        debug_info->centroid.z = centroid_accumulator.z() / count;
-      }
     }
     return clearance;
   }
@@ -2164,46 +2155,6 @@ private:
         static_emergency_marker.points = static_debug_info.emergency_points;
         static_emergency_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
         markers.markers.push_back(static_emergency_marker);
-
-        visualization_msgs::Marker static_centroid_marker;
-        static_centroid_marker.header.stamp = static_debug_info.stamp;
-        static_centroid_marker.header.frame_id = static_debug_info.frame_id;
-        static_centroid_marker.ns = "static_emergency_centroid";
-        static_centroid_marker.id = 0;
-        static_centroid_marker.type = visualization_msgs::Marker::SPHERE;
-        static_centroid_marker.action = visualization_msgs::Marker::ADD;
-        static_centroid_marker.pose.orientation.w = 1.0;
-        static_centroid_marker.pose.position = static_debug_info.centroid;
-        static_centroid_marker.scale.x = 0.35;
-        static_centroid_marker.scale.y = 0.35;
-        static_centroid_marker.scale.z = 0.35;
-        static_centroid_marker.color.r = 1.0f;
-        static_centroid_marker.color.g = 0.6f;
-        static_centroid_marker.color.b = 0.9f;
-        static_centroid_marker.color.a = 0.98f;
-        static_centroid_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
-        markers.markers.push_back(static_centroid_marker);
-
-        visualization_msgs::Marker static_lines_marker;
-        static_lines_marker.header.stamp = static_debug_info.stamp;
-        static_lines_marker.header.frame_id = static_debug_info.frame_id;
-        static_lines_marker.ns = "static_emergency_centroid_links";
-        static_lines_marker.id = 0;
-        static_lines_marker.type = visualization_msgs::Marker::LINE_LIST;
-        static_lines_marker.action = visualization_msgs::Marker::ADD;
-        static_lines_marker.pose.orientation.w = 1.0;
-        static_lines_marker.scale.x = 0.03;
-        static_lines_marker.color.r = 1.0f;
-        static_lines_marker.color.g = 0.45f;
-        static_lines_marker.color.b = 0.85f;
-        static_lines_marker.color.a = 0.6f;
-        static_lines_marker.points.reserve(static_debug_info.emergency_points.size() * 2U);
-        for (const auto& emergency_point : static_debug_info.emergency_points) {
-          static_lines_marker.points.push_back(static_debug_info.centroid);
-          static_lines_marker.points.push_back(emergency_point);
-        }
-        static_lines_marker.lifetime = ros::Duration(visual_object_marker_lifetime_sec_);
-        markers.markers.push_back(static_lines_marker);
       }
     }
 

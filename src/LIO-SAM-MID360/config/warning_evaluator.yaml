@@ -52,9 +52,9 @@ warning_evaluator:
   static_notice_clearance: 5.0
   static_warning_clearance: 3.0
   static_emergency_clearance: 1.0
-  static_notice_min_points: 3
-  static_warning_min_points: 5
-  static_emergency_min_points: 8
+  static_notice_min_points: 10
+  static_warning_min_points: 10
+  static_emergency_min_points: 10
 
   dynamic_notice_clearance: 5.0
   dynamic_warning_clearance: 3.0

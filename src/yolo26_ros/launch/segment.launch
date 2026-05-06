@@ -22,10 +22,10 @@
     <arg name="object_range_gate_scale" default="0.08" />
     <arg name="object_cluster_tolerance_m" default="0.6" />
     <arg name="object_cluster_min_points" default="20" />
-    <arg name="object_radius_percentile" default="0.95" />
-    <arg name="object_radius_outlier_tolerance_m" default="0.25" />
-    <arg name="object_radius_outlier_min_support_points" default="3" />
-    <arg name="object_radius_padding_m" default="0.12" />
+    <arg name="object_radius_percentile" default="0.9" />
+    <arg name="object_radius_outlier_tolerance_m" default="0.15" />
+    <arg name="object_radius_outlier_min_support_points" default="20" />
+    <arg name="object_radius_padding_m" default="0.2" />
     <arg name="object_max_accepted_radius_m" default="0.0" />
     <arg name="enable_temporal_metrics" default="false" />
     <arg name="temporal_metrics_log_period_sec" default="5.0" />
